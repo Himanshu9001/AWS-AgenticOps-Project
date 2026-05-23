@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgenticOps Platform</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+  header { background: #1a1d27; padding: 16px 24px; border-bottom: 1px solid #2d2d3a; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 18px; font-weight: 600; color: #fff; }
+  header span { font-size: 12px; background: #2563eb; color: #fff; padding: 2px 8px; border-radius: 12px; }
+  #chat { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  .message { max-width: 80%; padding: 12px 16px; border-radius: 12px; line-height: 1.6; font-size: 14px; white-space: pre-wrap; }
+  .user { background: #2563eb; color: #fff; align-self: flex-end; border-radius: 12px 12px 4px 12px; }
+  .agent { background: #1a1d27; color: #e0e0e0; align-self: flex-start; border-radius: 12px 12px 12px 4px; border: 1px solid #2d2d3a; }
+  .system { background: #1a2a1a; color: #4ade80; align-self: center; font-size: 12px; padding: 6px 12px; border-radius: 20px; }
+  .thinking { color: #6b7280; font-style: italic; }
+  #input-area { background: #1a1d27; border-top: 1px solid #2d2d3a; padding: 16px 24px; display: flex; gap: 12px; align-items: flex-end; }
+  #task-input { flex: 1; background: #0f1117; border: 1px solid #2d2d3a; border-radius: 8px; padding: 12px 16px; color: #e0e0e0; font-size: 14px; resize: none; min-height: 44px; max-height: 120px; font-family: inherit; }
+  #task-input:focus { outline: none; border-color: #2563eb; }
+  #send-btn { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 12px 20px; cursor: pointer; font-size: 14px; font-weight: 500; white-space: nowrap; }
+  #send-btn:disabled { background: #374151; cursor: not-allowed; }
+  #mode-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #6b7280; }
+  #mode-toggle input { accent-color: #2563eb; }
+  .status-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .queued { background: #374151; color: #9ca3af; }
+  .processing { background: #1e3a5f; color: #60a5fa; }
+  .completed { background: #14532d; color: #4ade80; }
+  .failed { background: #450a0a; color: #f87171; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ AgenticOps Platform</h1>
+  <span>Multi-Agent AI</span>
+</header>
+
+<div id="chat">
+  <div class="message system">Connected to AgenticOps — IT Ops + Data Pipeline Intelligence</div>
+</div>
+
+<div id="input-area">
+  <div id="mode-toggle">
+    <input type="checkbox" id="async-mode">
+    <label for="async-mode">Async</label>
+  </div>
+  <textarea id="task-input" placeholder="Ask about infrastructure issues, pipeline failures, or incidents..." rows="1"></textarea>
+  <button id="send-btn" onclick="sendMessage()">Send</button>
+</div>
+
+<script>
+const API_URL = "https://ipm0lawtc7.execute-api.us-east-1.amazonaws.com/dev";
+const chat = document.getElementById("chat");
+const input = document.getElementById("task-input");
+const btn = document.getElementById("send-btn");
+
+// Auto-resize textarea
+input.addEventListener("input", () => {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 120) + "px";
+});
+
+// Send on Enter (Shift+Enter for newline)
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+function addMessage(text, type) {
+  const div = document.createElement("div");
+  div.className = `message ${type}`;
+  div.textContent = text;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+function addStatus(text) {
+  const div = document.createElement("div");
+  div.className = "message system";
+  div.textContent = text;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+async function sendMessage() {
+  const task = input.value.trim();
+  if (!task) return;
+
+  const asyncMode = document.getElementById("async-mode").checked;
+
+  // Show user message
+  addMessage(task, "user");
+  input.value = "";
+  input.style.height = "auto";
+  btn.disabled = true;
+
+  if (asyncMode) {
+    await sendAsync(task);
+  } else {
+    await sendSync(task);
+  }
+
+  btn.disabled = false;
+}
+
+async function sendSync(task) {
+  const thinking = addMessage("Thinking...", "agent thinking");
+
+  try {
+    const response = await fetch(`${API_URL}/invoke`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({task, async: false})
+    });
+
+    const data = await response.json();
+    thinking.remove();
+
+    if (data.result) {
+      addMessage(data.result, "agent");
+    } else {
+      addMessage("No response received.", "agent");
+    }
+  } catch (err) {
+    thinking.remove();
+    addMessage(`Error: ${err.message}`, "agent");
+  }
+}
+
+async function sendAsync(task) {
+  const statusMsg = addStatus("Submitting async task...");
+
+  try {
+    // Submit task
+    const submitRes = await fetch(`${API_URL}/invoke`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({task, async: true})
+    });
+
+    const submitData = await submitRes.json();
+    const taskId = submitData.taskId;
+    statusMsg.textContent = `Task queued: ${taskId}`;
+
+    // Poll for result
+    const resultMsg = addMessage("Processing...", "agent thinking");
+    let attempts = 0;
+
+    const poll = setInterval(async () => {
+      attempts++;
+      try {
+        const statusRes = await fetch(`${API_URL}/status/${taskId}`);
+        const statusData = await statusRes.json();
+
+        resultMsg.textContent = `Status: ${statusData.status} (${attempts * 5}s elapsed)`;
+
+        if (statusData.status === "completed") {
+          clearInterval(poll);
+          resultMsg.remove();
+          statusMsg.textContent = `✅ Completed in ~${attempts * 5}s`;
+          addMessage(statusData.result, "agent");
+        } else if (statusData.status === "failed") {
+          clearInterval(poll);
+          resultMsg.remove();
+          statusMsg.textContent = `❌ Failed: ${statusData.errorMessage}`;
+        } else if (attempts > 72) {
+          clearInterval(poll);
+          resultMsg.textContent = "Timed out after 6 minutes";
+        }
+      } catch (err) {
+        console.error("Poll error:", err);
+      }
+    }, 5000);
+
+  } catch (err) {
+    statusMsg.textContent = `Error: ${err.message}`;
+  }
+}
+</script>
+</body>
+</html>

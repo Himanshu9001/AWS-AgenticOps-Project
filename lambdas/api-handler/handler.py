@@ -2,8 +2,8 @@ import boto3
 import json
 import uuid
 import time
+from botocore.config import Config
 
-# Read config from SSM at cold start — not per invocation
 ssm = boto3.client("ssm", region_name="us-east-1")
 sqs = boto3.client("sqs", region_name="us-east-1")
 dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
@@ -11,16 +11,21 @@ dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
 def get_param(name):
     return ssm.get_parameter(Name=name)["Parameter"]["Value"]
 
-# Load config once at cold start
 QUEUE_URL = get_param("/agenticops/sqs/async-tasks-url")
 RESULTS_TABLE = get_param("/agenticops/dynamodb/results-table")
 
+CORS_HEADERS = {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Allow-Methods": "POST,GET,OPTIONS"
+}
+
 def lambda_handler(event, context):
-    """
-    API Handler Lambda — entry point for all agent requests
-    Sync path: short tasks returned directly
-    Async path: long tasks queued, taskId returned immediately
-    """
+    # Handle CORS preflight
+    if event.get("httpMethod") == "OPTIONS":
+        return {"statusCode": 200, "headers": CORS_HEADERS, "body": ""}
+
     body = json.loads(event.get("body", "{}"))
     task_text = body.get("task", "")
     async_mode = body.get("async", False)
@@ -29,13 +34,13 @@ def lambda_handler(event, context):
     if not task_text:
         return {
             "statusCode": 400,
+            "headers": CORS_HEADERS,
             "body": json.dumps({"error": "task field is required"})
         }
 
     task_id = f"task-{uuid.uuid4().hex[:12]}"
 
     if async_mode:
-        # Async path — publish to SQS and return taskId immediately
         sqs.send_message(
             QueueUrl=QUEUE_URL,
             MessageBody=json.dumps({
@@ -43,11 +48,9 @@ def lambda_handler(event, context):
                 "sessionId": session_id,
                 "task": task_text,
                 "submittedAt": int(time.time())
-            }),
-            MessageGroupId=session_id  # not used for standard queue but good practice
+            })
         )
 
-        # Write initial status to DynamoDB
         table = dynamodb.Table(RESULTS_TABLE)
         table.put_item(Item={
             "taskId": task_id,
@@ -55,12 +58,12 @@ def lambda_handler(event, context):
             "task": task_text,
             "sessionId": session_id,
             "submittedAt": int(time.time()),
-            "ttl": int(time.time()) + 3600  # expire after 1 hour
+            "ttl": int(time.time()) + 3600
         })
 
         return {
             "statusCode": 202,
-            "headers": {"Content-Type": "application/json"},
+            "headers": CORS_HEADERS,
             "body": json.dumps({
                 "taskId": task_id,
                 "status": "queued",
@@ -69,8 +72,8 @@ def lambda_handler(event, context):
         }
 
     else:
-        # Sync path — invoke supervisor agent directly and wait
-        bedrock = boto3.client("bedrock-agent-runtime", region_name="us-east-1")
+        config = Config(read_timeout=120, connect_timeout=10)
+        bedrock = boto3.client("bedrock-agent-runtime", region_name="us-east-1", config=config)
         agent_id = get_param("/agenticops/bedrock/supervisor-agent-id")
         alias_id = get_param("/agenticops/bedrock/supervisor-agent-alias-id")
 
@@ -88,7 +91,7 @@ def lambda_handler(event, context):
 
         return {
             "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
+            "headers": CORS_HEADERS,
             "body": json.dumps({
                 "taskId": task_id,
                 "status": "completed",
