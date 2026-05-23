@@ -1,0 +1,43 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Describe AWS Resource",
+    "version": "1.0.0",
+    "description": "Describes the current state of an AWS resource"
+  },
+  "paths": {
+    "/describe-resource": {
+      "get": {
+        "summary": "Describe an AWS resource",
+        "description": "Returns the current state, metrics, and configuration of an EC2 instance or RDS instance",
+        "operationId": "describeResource",
+        "parameters": [
+          {
+            "name": "resourceType",
+            "in": "query",
+            "required": true,
+            "description": "Type of AWS resource: ec2 or rds",
+            "schema": {"type": "string", "enum": ["ec2", "rds"]}
+          },
+          {
+            "name": "resourceId",
+            "in": "query",
+            "required": true,
+            "description": "The resource ID — EC2 instance ID or RDS DB identifier",
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resource details and current metrics",
+            "content": {
+              "application/json": {
+                "schema": {"type": "object"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

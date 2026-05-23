@@ -1,0 +1,56 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Trigger Remediation",
+    "version": "1.0.0",
+    "description": "Executes safe remediation actions on AWS resources"
+  },
+  "paths": {
+    "/trigger-remediation": {
+      "post": {
+        "summary": "Trigger a remediation action",
+        "description": "Executes an approved remediation action on an AWS resource. Only restart-service, scale-out, and reboot-instance are allowed.",
+        "operationId": "triggerRemediation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action", "resourceId", "reason"],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": ["restart-service", "scale-out", "reboot-instance"],
+                    "description": "The remediation action to execute"
+                  },
+                  "resourceId": {
+                    "type": "string",
+                    "description": "The EC2 instance ID or ASG name to remediate"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "Explanation of why this remediation is being triggered"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Remediation executed successfully",
+            "content": {
+              "application/json": {
+                "schema": {"type": "object"}
+              }
+            }
+          },
+          "403": {
+            "description": "Action not allowed"
+          }
+        }
+      }
+    }
+  }
+}

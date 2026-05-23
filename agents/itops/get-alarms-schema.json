@@ -1,0 +1,49 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Get CloudWatch Alarms",
+    "version": "1.0.0",
+    "description": "Retrieves active CloudWatch alarms for AWS resources"
+  },
+  "paths": {
+    "/get-alarms": {
+      "get": {
+        "summary": "Get active CloudWatch alarms",
+        "description": "Returns a list of CloudWatch alarms filtered by state. Use this to check current alarm status for any AWS resource.",
+        "operationId": "getAlarms",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "Alarm state to filter by: ALARM, OK, or INSUFFICIENT_DATA. Defaults to ALARM.",
+            "schema": {"type": "string", "enum": ["ALARM", "OK", "INSUFFICIENT_DATA"]}
+          },
+          {
+            "name": "namespace",
+            "in": "query",
+            "required": false,
+            "description": "Optional alarm name prefix to filter results",
+            "schema": {"type": "string"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of alarms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "alarmCount": {"type": "integer"},
+                    "alarms": {"type": "array"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
