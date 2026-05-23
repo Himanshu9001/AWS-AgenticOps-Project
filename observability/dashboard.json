@@ -1,0 +1,134 @@
+{
+  "widgets": [
+    {
+      "type": "metric",
+      "x": 0, "y": 0, "width": 12, "height": 6,
+      "properties": {
+        "title": "Agent Invocation Errors",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/Lambda", "Errors", "FunctionName", "agenticops-api-handler"],
+          ["AWS/Lambda", "Errors", "FunctionName", "agenticops-async-consumer"],
+          ["AWS/Lambda", "Errors", "FunctionName", "agenticops-invoke-agent"],
+          ["AWS/Lambda", "Errors", "FunctionName", "agenticops-aggregate-results"]
+        ],
+        "period": 300,
+        "stat": "Sum",
+        "view": "timeSeries",
+        "annotations": {"horizontal": []}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12, "y": 0, "width": 12, "height": 6,
+      "properties": {
+        "title": "Lambda Duration p99",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/Lambda", "Duration", "FunctionName", "agenticops-async-consumer", {"stat": "p99"}],
+          ["AWS/Lambda", "Duration", "FunctionName", "agenticops-invoke-agent", {"stat": "p99"}],
+          ["AWS/Lambda", "Duration", "FunctionName", "agenticops-aggregate-results", {"stat": "p99"}]
+        ],
+        "period": 300,
+        "view": "timeSeries",
+        "annotations": {"horizontal": []}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 6, "width": 12, "height": 6,
+      "properties": {
+        "title": "SQS Queue Depth",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "agenticops-async-tasks"],
+          ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "agenticops-async-tasks-dlq"]
+        ],
+        "period": 60,
+        "stat": "Maximum",
+        "view": "timeSeries",
+        "annotations": {"horizontal": []}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12, "y": 6, "width": 12, "height": 6,
+      "properties": {
+        "title": "Step Functions Executions",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/States", "ExecutionsStarted", "StateMachineArn", "arn:aws:states:us-east-1:011528270076:stateMachine:agenticops-workflow"],
+          ["AWS/States", "ExecutionsSucceeded", "StateMachineArn", "arn:aws:states:us-east-1:011528270076:stateMachine:agenticops-workflow"],
+          ["AWS/States", "ExecutionsFailed", "StateMachineArn", "arn:aws:states:us-east-1:011528270076:stateMachine:agenticops-workflow"]
+        ],
+        "period": 300,
+        "stat": "Sum",
+        "view": "timeSeries",
+        "annotations": {"horizontal": []}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 12, "width": 12, "height": 6,
+      "properties": {
+        "title": "Bedrock Token Usage",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/Bedrock", "InputTokenCount", "ModelId", "us.anthropic.claude-sonnet-4-6"],
+          ["AWS/Bedrock", "OutputTokenCount", "ModelId", "us.anthropic.claude-sonnet-4-6"]
+        ],
+        "period": 3600,
+        "stat": "Sum",
+        "view": "timeSeries",
+        "annotations": {"horizontal": []}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12, "y": 12, "width": 12, "height": 6,
+      "properties": {
+        "title": "Bedrock Invocation Latency p99",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/Bedrock", "InvocationLatency", "ModelId", "us.anthropic.claude-sonnet-4-6"]
+        ],
+        "period": 300,
+        "stat": "p99",
+        "view": "timeSeries",
+        "annotations": {"horizontal": [{"value": 30000, "label": "30s threshold", "color": "#ff0000"}]}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 18, "width": 12, "height": 6,
+      "properties": {
+        "title": "DynamoDB Task Results Latency",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/DynamoDB", "SuccessfulRequestLatency", "TableName", "agenticops-task-results", "Operation", "PutItem"],
+          ["AWS/DynamoDB", "SuccessfulRequestLatency", "TableName", "agenticops-task-results", "Operation", "GetItem"]
+        ],
+        "period": 300,
+        "stat": "p99",
+        "view": "timeSeries",
+        "annotations": {"horizontal": []}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12, "y": 18, "width": 12, "height": 6,
+      "properties": {
+        "title": "Guardrail Interventions",
+        "region": "us-east-1",
+        "metrics": [
+          ["AWS/Bedrock", "GuardrailInvocationCount", "GuardrailId", "nwnzhu0xw8xg"],
+          ["AWS/Bedrock", "GuardrailBlockedCount", "GuardrailId", "nwnzhu0xw8xg"]
+        ],
+        "period": 3600,
+        "stat": "Sum",
+        "view": "timeSeries",
+        "annotations": {"horizontal": []}
+      }
+    }
+  ]
+}
