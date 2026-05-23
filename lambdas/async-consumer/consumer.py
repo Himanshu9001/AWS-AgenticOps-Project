@@ -1,10 +1,24 @@
 import boto3
 import json
 import time
+import logging
+from botocore.config import Config
+
+# Structured JSON logger
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def log(level, event, **kwargs):
+    logger.log(level, json.dumps({
+        "event": event,
+        "timestamp": int(time.time()),
+        **kwargs
+    }))
 
 ssm = boto3.client("ssm", region_name="us-east-1")
 dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
-bedrock = boto3.client("bedrock-agent-runtime", region_name="us-east-1")
+config = Config(read_timeout=300, connect_timeout=10, retries={"max_attempts": 3, "mode": "adaptive"})
+bedrock = boto3.client("bedrock-agent-runtime", region_name="us-east-1", config=config)
 
 def get_param(name):
     return ssm.get_parameter(Name=name)["Parameter"]["Value"]
@@ -22,10 +36,17 @@ def lambda_handler(event, context):
         session_id = task["sessionId"]
         task_text = task["task"]
 
+        log(logging.INFO, "task_received",
+            taskId=task_id,
+            sessionId=session_id,
+            requestId=context.aws_request_id)
+
         # Idempotency check
         existing = table.get_item(Key={"taskId": task_id}).get("Item", {})
         if existing.get("status") in ["processing", "completed"]:
-            print(f"Task {task_id} already {existing['status']}, skipping")
+            log(logging.INFO, "task_skipped_duplicate",
+                taskId=task_id,
+                existingStatus=existing["status"])
             continue
 
         # Mark as processing
@@ -36,8 +57,9 @@ def lambda_handler(event, context):
             ExpressionAttributeValues={":s": "processing", ":t": int(time.time())}
         )
 
+        start_time = time.time()
+
         try:
-            # Invoke supervisor agent
             response = bedrock.invoke_agent(
                 agentId=AGENT_ID,
                 agentAliasId=ALIAS_ID,
@@ -45,36 +67,43 @@ def lambda_handler(event, context):
                 inputText=task_text
             )
 
-            # Stream full response
             agent_result = ""
             for event in response["completion"]:
                 if "chunk" in event:
                     agent_result += event["chunk"]["bytes"].decode("utf-8")
 
-            # Write completed result — use ExpressionAttributeNames for reserved keyword
+            duration_ms = int((time.time() - start_time) * 1000)
+
             table.update_item(
                 Key={"taskId": task_id},
                 UpdateExpression="SET #s = :s, #r = :r, completedAt = :t",
-                ExpressionAttributeNames={
-                    "#s": "status",
-                    "#r": "result"      # 'result' is reserved in DynamoDB
-                },
+                ExpressionAttributeNames={"#s": "status", "#r": "result"},
                 ExpressionAttributeValues={
                     ":s": "completed",
                     ":r": agent_result,
                     ":t": int(time.time())
                 }
             )
-            print(f"Task {task_id} completed successfully")
+
+            log(logging.INFO, "task_completed",
+                taskId=task_id,
+                durationMs=duration_ms,
+                resultLength=len(agent_result))
 
         except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+
             table.update_item(
                 Key={"taskId": task_id},
                 UpdateExpression="SET #s = :s, errorMessage = :e",
                 ExpressionAttributeNames={"#s": "status"},
                 ExpressionAttributeValues={":s": "failed", ":e": str(e)}
             )
-            print(f"Task {task_id} failed: {e}")
+
+            log(logging.ERROR, "task_failed",
+                taskId=task_id,
+                durationMs=duration_ms,
+                error=str(e))
             raise
 
     return {"statusCode": 200}

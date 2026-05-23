@@ -115,7 +115,7 @@ async function sendSync(task) {
   try {
     const response = await fetch(`${API_URL}/invoke`, {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
+      headers: {"Content-Type": "application/json", "x-api-key": "LlhNn3rMwo1i4ARUtgdBP9oYrDFJXIAJ4EUh5fcL"},
       body: JSON.stringify({task, async: false})
     });
 
@@ -140,7 +140,7 @@ async function sendAsync(task) {
     // Submit task
     const submitRes = await fetch(`${API_URL}/invoke`, {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
+      headers: {"Content-Type": "application/json", "x-api-key": "LlhNn3rMwo1i4ARUtgdBP9oYrDFJXIAJ4EUh5fcL"},
       body: JSON.stringify({task, async: true})
     });
 

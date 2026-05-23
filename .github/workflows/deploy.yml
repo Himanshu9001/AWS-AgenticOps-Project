@@ -1,13 +1,17 @@
-# .github/workflows/deploy.yml
 name: AgenticOps Deploy
 
 on:
   push:
     branches: [main]
-  workflow_dispatch:        # manual trigger anytime
+    paths:
+      - 'lambdas/**'
+      - 'agents/**'
+      - 'stepfunctions/**'
+  workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
+  ACCOUNT_ID: 011528270076
 
 jobs:
   deploy-lambdas:
@@ -22,5 +26,52 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Placeholder - Lambda deploy
-        run: echo "Lambda deploy steps coming in Phase 3"
+      - name: Deploy IT Ops Lambdas
+        run: |
+          cd lambdas/itops-actions
+          for f in get_cloudwatch_alarms describe_resource trigger_remediation; do
+            zip ${f}.zip ${f}.py
+            aws lambda update-function-code \
+              --function-name agenticops-itops-${f//_/-} \
+              --zip-file fileb://${f}.zip \
+              --region $AWS_REGION
+            echo "Deployed: $f"
+          done
+
+      - name: Deploy Pipeline Lambdas
+        run: |
+          cd lambdas/datapipeline-actions
+          zip list_pipelines.zip list_pipelines.py
+          aws lambda update-function-code --function-name agenticops-pipeline-list --zip-file fileb://list_pipelines.zip --region $AWS_REGION
+          zip get_pipeline_status.zip get_pipeline_status.py
+          aws lambda update-function-code --function-name agenticops-pipeline-status --zip-file fileb://get_pipeline_status.zip --region $AWS_REGION
+          zip trigger_pipeline.zip trigger_pipeline.py
+          aws lambda update-function-code --function-name agenticops-pipeline-trigger --zip-file fileb://trigger_pipeline.zip --region $AWS_REGION
+
+      - name: Deploy API Lambdas
+        run: |
+          cd lambdas/api-handler
+          zip handler.zip handler.py
+          aws lambda update-function-code --function-name agenticops-api-handler --zip-file fileb://handler.zip --region $AWS_REGION
+          zip status.zip status.py
+          aws lambda update-function-code --function-name agenticops-status-handler --zip-file fileb://status.zip --region $AWS_REGION
+
+      - name: Deploy Async Consumer
+        run: |
+          cd lambdas/async-consumer
+          zip consumer.zip consumer.py
+          aws lambda update-function-code --function-name agenticops-async-consumer --zip-file fileb://consumer.zip --region $AWS_REGION
+
+      - name: Deploy Step Functions Lambdas
+        run: |
+          cd lambdas/stepfunctions
+          zip invoke_agent.zip invoke_agent.py
+          aws lambda update-function-code --function-name agenticops-invoke-agent --zip-file fileb://invoke_agent.zip --region $AWS_REGION
+          zip aggregate_results.zip aggregate_results.py
+          aws lambda update-function-code --function-name agenticops-invoke-agent --zip-file fileb://aggregate_results.zip --region $AWS_REGION
+
+      - name: Verify deployments
+        run: |
+          aws lambda list-functions --region $AWS_REGION \
+            --query "Functions[?starts_with(FunctionName, 'agenticops')].{Name:FunctionName, Modified:LastModified}" \
+            --output table
