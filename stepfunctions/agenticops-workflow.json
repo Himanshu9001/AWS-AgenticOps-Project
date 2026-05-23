@@ -1,0 +1,116 @@
+{
+  "Comment": "AgenticOps multi-agent workflow — parallel IT Ops and Pipeline analysis",
+  "StartAt": "ParallelAgentAnalysis",
+  "States": {
+    "ParallelAgentAnalysis": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "InvokeITOpsAgent",
+          "States": {
+            "InvokeITOpsAgent": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "agenticops-invoke-agent",
+                "Payload": {
+                  "agentId": "UQINWRUDBC",
+                  "agentAliasId": "4414KWRLQ8",
+                  "sessionId.$": "$.sessionId",
+                  "inputText.$": "$.itOpsQuery"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                  "IntervalSeconds": 3,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "ITOpsAgentFailed"
+                }
+              ],
+              "End": true
+            },
+            "ITOpsAgentFailed": {
+              "Type": "Pass",
+              "Result": {"Payload": {"result": "IT Ops agent unavailable"}},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "InvokePipelineAgent",
+          "States": {
+            "InvokePipelineAgent": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "agenticops-invoke-agent",
+                "Payload": {
+                  "agentId": "YGZ3D0T7HC",
+                  "agentAliasId": "VDLDYWNPDK",
+                  "sessionId.$": "$.sessionId",
+                  "inputText.$": "$.pipelineQuery"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                  "IntervalSeconds": 3,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "PipelineAgentFailed"
+                }
+              ],
+              "End": true
+            },
+            "PipelineAgentFailed": {
+              "Type": "Pass",
+              "Result": {"Payload": {"result": "Pipeline agent unavailable"}},
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "ReshapeParallelOutput"
+    },
+    "ReshapeParallelOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "parallelResults.$": "$",
+        "sessionId": "sfn-session"
+      },
+      "Next": "AggregateResults"
+    },
+    "AggregateResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "agenticops-aggregate-results",
+        "Payload.$": "$"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "WorkflowComplete"
+    },
+    "WorkflowComplete": {
+      "Type": "Succeed"
+    }
+  }
+}
