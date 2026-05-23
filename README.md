@@ -116,58 +116,62 @@ EventBridge Alarm → State Machine
 ---
 
 ## Project Structure
-
+ 
 ```
 AWS-AgenticOps-Project/
-├── agents/
-│   ├── itops/
-│   │   ├── get-alarms-schema.json          # OpenAPI schema for CloudWatch alarms action group
-│   │   ├── describe-resource-schema.json   # OpenAPI schema for EC2/RDS describe action group
-│   │   └── trigger-remediation-schema.json # OpenAPI schema for remediation action group
-│   └── datapipeline/
-│       ├── list-pipelines-schema.json      # OpenAPI schema for pipeline list action group
-│       ├── get-pipeline-status-schema.json # OpenAPI schema for pipeline status action group
-│       └── trigger-pipeline-schema.json    # OpenAPI schema for pipeline trigger action group
-├── lambdas/
-│   ├── api-handler/
-│   │   ├── handler.py                      # API entry point — sync/async routing
-│   │   └── status.py                       # Task status poller from DynamoDB
-│   ├── async-consumer/
-│   │   └── consumer.py                     # SQS consumer — invokes supervisor agent
-│   ├── itops-actions/
-│   │   ├── get_cloudwatch_alarms.py        # IT Ops: fetch active CloudWatch alarms
-│   │   ├── describe_resource.py            # IT Ops: describe EC2/RDS resource state
-│   │   └── trigger_remediation.py          # IT Ops: execute restart/scale/reboot actions
-│   ├── datapipeline-actions/
-│   │   ├── list_pipelines.py               # Pipeline: list Step Functions + Glue pipelines
-│   │   ├── get_pipeline_status.py          # Pipeline: get last 5 execution runs
-│   │   └── trigger_pipeline.py             # Pipeline: start or retry approved pipelines
-│   └── stepfunctions/
-│       ├── invoke_agent.py                 # SFN: invoke a specific Bedrock agent
-│       └── aggregate_results.py            # SFN: ask supervisor to synthesize parallel results
-├── knowledge-base/
-│   ├── runbooks/
-│   │   ├── runbook-high-cpu-alarm.md
-│   │   ├── runbook-rds-connection-exhaustion.md
-│   │   └── runbook-lambda-errors.md
-│   ├── postmortems/
-│   │   ├── postmortem-rds-outage-feb2025.md
-│   │   ├── postmortem-lambda-cascade-mar2025.md
-│   │   └── postmortem-cpu-spike-jan2025.md
-│   └── pipeline-sops/
-│       ├── pipeline-sop-kb-ingestion.md
-│       ├── pipeline-sop-async-pipeline.md
-│       └── pipeline-sop-database-pipeline.md
-├── stepfunctions/
-│   └── agenticops-workflow.json            # State machine definition
-├── observability/
-│   └── dashboard.json                      # CloudWatch dashboard definition
-├── flows/
-│   └── chat-ui.html                        # Single-file chat UI
-├── infra.md                                # Infrastructure reference
-└── README.md                               # This file
+|-- .github/
+|   |-- workflows/
+|       |-- deploy.yml                      # CI/CD -- auto-deploys Lambdas on push to main
+|-- agents/
+|   |-- itops/
+|   |   |-- get-alarms-schema.json          # OpenAPI: CloudWatch alarms action group
+|   |   |-- describe-resource-schema.json   # OpenAPI: EC2/RDS describe action group
+|   |   |-- trigger-remediation-schema.json # OpenAPI: remediation action group
+|   |-- datapipeline/
+|       |-- list-pipelines-schema.json      # OpenAPI: pipeline list action group
+|       |-- get-pipeline-status-schema.json # OpenAPI: pipeline status action group
+|       |-- trigger-pipeline-schema.json    # OpenAPI: pipeline trigger action group
+|-- lambdas/
+|   |-- api-handler/
+|   |   |-- handler.py                      # API entry -- sync/async routing + CORS
+|   |   |-- status.py                       # Task status poller from DynamoDB
+|   |-- async-consumer/
+|   |   |-- consumer.py                     # SQS consumer -- structured logging + retry
+|   |-- itops-actions/
+|   |   |-- get_cloudwatch_alarms.py        # IT Ops: fetch active CloudWatch alarms
+|   |   |-- describe_resource.py            # IT Ops: EC2/RDS resource state + metrics
+|   |   |-- trigger_remediation.py          # IT Ops: restart/scale/reboot (allowlisted)
+|   |-- datapipeline-actions/
+|   |   |-- list_pipelines.py               # Pipeline: list SFN + Glue (graceful empty)
+|   |   |-- get_pipeline_status.py          # Pipeline: last 5 execution runs
+|   |   |-- trigger_pipeline.py             # Pipeline: start/retry (allowlisted)
+|   |-- stepfunctions/
+|       |-- invoke_agent.py                 # SFN: invoke specific Bedrock agent + retry
+|       |-- aggregate_results.py            # SFN: supervisor synthesizes parallel results
+|-- knowledge-base/
+|   |-- runbooks/
+|   |   |-- runbook-high-cpu-alarm.md
+|   |   |-- runbook-rds-connection-exhaustion.md
+|   |   |-- runbook-lambda-errors.md
+|   |-- postmortems/
+|   |   |-- postmortem-rds-outage-feb2025.md
+|   |   |-- postmortem-lambda-cascade-mar2025.md
+|   |   |-- postmortem-cpu-spike-jan2025.md
+|   |-- pipeline-sops/
+|       |-- pipeline-sop-kb-ingestion.md
+|       |-- pipeline-sop-async-pipeline.md
+|       |-- pipeline-sop-database-pipeline.md
+|-- stepfunctions/
+|   |-- agenticops-workflow.json            # State machine definition
+|-- observability/
+|   |-- dashboard.json                      # CloudWatch dashboard (8 widgets)
+|-- flows/
+|   |-- chat-ui.html                        # Single-file chat UI (async polling)
+|-- infra.md                                # Infrastructure reference
+|-- TROUBLESHOOTING.md                      # 25 documented issues and fixes
+|-- README.md                               # This file
 ```
-
+ 
 ---
 
 ## Agents
@@ -870,6 +874,526 @@ python3 -m http.server 8080
 - **Visibility timeout must exceed Lambda timeout** — if Lambda takes 300s but visibility is 30s, messages reappear causing duplicate processing
 - **DLQ depth should always be zero** — any message there is a failed task requiring investigation
 
+---
+
+## Agents
+ 
+### Supervisor Agent
+ 
+**ID:** `45BDFFSGGZ` | **Alias:** `U4A49NOUEK` | **Guardrail:** `nwnzhu0xw8xg v1`
+ 
+Central orchestrator. Routes all user queries to specialist agents using LLM-based reasoning over collaborator instructions.
+ 
+**Routing logic:**
+- IT Ops queries -> IT Ops Agent (CloudWatch, EC2/RDS, Lambda errors, remediation)
+- Pipeline queries -> Data Pipeline Agent (SFN failures, Glue errors, SQS, retries)
+- Cross-domain -> delegates to both agents, synthesizes combined response
+**Collaboration mode:** `SUPERVISOR`
+ 
+---
+ 
+### IT Ops Agent
+ 
+**ID:** `UQINWRUDBC` | **Alias:** `4414KWRLQ8` | **Guardrail:** `nwnzhu0xw8xg v1`
+ 
+| Action Group | Lambda | Purpose |
+|---|---|---|
+| `get-cloudwatch-alarms` | `agenticops-itops-get-alarms` | Active CloudWatch alarms by state/namespace |
+| `describe-resource` | `agenticops-itops-describe-resource` | EC2/RDS current state + CPU metrics |
+| `trigger-remediation` | `agenticops-itops-trigger-remediation` | restart-service, scale-out, reboot-instance |
+ 
+**Allowlist on trigger-remediation:** Only `restart-service`, `scale-out`, `reboot-instance` — returns 403 for anything else.
+ 
+---
+ 
+### Data Pipeline Agent
+ 
+**ID:** `YGZ3D0T7HC` | **Alias:** `VDLDYWNPDK` | **Guardrail:** `nwnzhu0xw8xg v1`
+ 
+| Action Group | Lambda | Purpose |
+|---|---|---|
+| `list-pipelines` | `agenticops-pipeline-list` | Step Functions + Glue jobs (graceful empty) |
+| `get-pipeline-status` | `agenticops-pipeline-status` | Last 5 executions with errors |
+| `trigger-pipeline` | `agenticops-pipeline-trigger` | Start/retry approved pipelines only |
+ 
+**Allowed pipelines:** `agenticops-kb-ingestion`, `agenticops-data-quality`, `agenticops-db-backup-verifier`
+ 
+---
+ 
+## Knowledge Base
+ 
+**KB ID:** `NLHMUXZM4R` | **Data Source:** `B3QL9TOORM` | **Vector Store:** OpenSearch Serverless
+ 
+### Documents (9 total)
+ 
+| Document | Domain | Type |
+|---|---|---|
+| runbook-high-cpu-alarm.md | IT Ops | Runbook |
+| runbook-rds-connection-exhaustion.md | IT Ops | Runbook |
+| runbook-lambda-errors.md | IT Ops | Runbook |
+| postmortem-rds-outage-feb2025.md | IT Ops | Post-mortem |
+| postmortem-lambda-cascade-mar2025.md | AI Platform | Post-mortem |
+| postmortem-cpu-spike-jan2025.md | IT Ops | Post-mortem |
+| pipeline-sop-kb-ingestion.md | Data Pipeline | SOP |
+| pipeline-sop-async-pipeline.md | AI Platform | SOP |
+| pipeline-sop-database-pipeline.md | Data Pipeline | SOP |
+ 
+### RAG Configuration
+ 
+| Parameter | Value |
+|---|---|
+| Vector Store | OpenSearch Serverless (HNSW index, cosine similarity) |
+| Embedding Model | amazon.titan-embed-text-v2 — 1024 dimensions |
+| Chunking | Fixed-size, 300 tokens, 10% overlap |
+| Search | Semantic ANN via HNSW |
+ 
+### Re-syncing the KB
+ 
+```bash
+aws s3 cp knowledge-base/ s3://agenticops-knowledge-base-docs/ \
+  --recursive --exclude "*" --include "*.md" --region us-east-1
+ 
+aws bedrock-agent start-ingestion-job \
+  --knowledge-base-id NLHMUXZM4R \
+  --data-source-id B3QL9TOORM \
+  --region us-east-1
+```
+ 
+---
+ 
+## Async Pipeline
+ 
+API Gateway has a hard 29-second timeout. All agent queries use the async pattern.
+ 
+### Flow
+ 
+```
+POST /invoke (async: true)
+    --> api-handler: SQS publish + DynamoDB write (queued) --> 202 + taskId
+    --> async-consumer: SQS trigger --> invoke supervisor --> DynamoDB update (completed)
+    --> GET /status/{taskId} --> DynamoDB read --> return result
+```
+ 
+### Task Lifecycle
+ 
+| Status | Meaning |
+|---|---|
+| queued | Published to SQS, not yet picked up |
+| processing | Consumer Lambda running agent |
+| completed | Result available in DynamoDB |
+| failed | Failed after retries, error in DynamoDB |
+ 
+### SQS Configuration
+ 
+| Parameter | Value | Reason |
+|---|---|---|
+| Visibility timeout | 330s | Lambda timeout (300s) + 30s buffer |
+| Message retention | 4 hours | Tasks complete well within this |
+| Max receive count | 3 | Retry 3x before DLQ |
+| DLQ | agenticops-async-tasks-dlq | Failed tasks for investigation |
+ 
+### Idempotency Pattern
+ 
+```python
+existing = table.get_item(Key={"taskId": task_id}).get("Item", {})
+if existing.get("status") in ["processing", "completed"]:
+    return  # skip duplicate SQS delivery
+```
+ 
+---
+ 
+## Step Functions Workflow
+ 
+### State Machine: `agenticops-workflow`
+ 
+```
+ParallelAgentAnalysis (Parallel -- both branches simultaneously)
+    |-- InvokeITOpsAgent     (Task --> Lambda --> Bedrock IT Ops Agent)
+    |     Retry: 2x on Lambda errors, backoff 3s
+    |     Catch: --> ITOpsAgentFailed (graceful degradation)
+    |-- InvokePipelineAgent  (Task --> Lambda --> Bedrock Pipeline Agent)
+          Retry: 2x on Lambda errors, backoff 3s
+          Catch: --> PipelineAgentFailed (graceful degradation)
+              |
+ReshapeParallelOutput (Pass -- reshapes array to object)
+              |
+AggregateResults (Task --> Lambda --> Supervisor synthesizes both)
+              |
+WorkflowComplete (Succeed)
+```
+ 
+### Manual Execution
+ 
+```bash
+aws stepfunctions start-execution \
+  --state-machine-arn arn:aws:states:us-east-1:011528270076:stateMachine:agenticops-workflow \
+  --name "manual-$(date +%s)" \
+  --input '{"sessionId":"manual-001","itOpsQuery":"Check infrastructure health","pipelineQuery":"Check pipeline health"}' \
+  --region us-east-1
+```
+ 
+---
+ 
+## Security
+ 
+### Guardrails (ID: `nwnzhu0xw8xg` Version 1 -- pinned on all agents)
+ 
+| Layer | Configuration |
+|---|---|
+| PII | EMAIL, PHONE, AWS_ACCESS_KEY, PASSWORD --> BLOCK |
+| Word Filters | drop database, rm -rf, delete all, format disk --> BLOCK |
+| Denied Topics | competitor-discussion, destructive-actions --> DENY |
+| Content Filters | Hate/Violence/Misconduct: Medium, Sexual: High, Prompt Attack: High |
+ 
+**Version pinning:** All agents use guardrailVersion "1" not "DRAFT" -- changes require publishing a new version.
+ 
+### WAF (ACL ID: `63a0086a-b7ef-45d3-b6a2-873866006ed3`)
+ 
+| Rule | Action | Purpose |
+|---|---|---|
+| RateLimitRule | Block | > 100 requests per IP per 5 minutes |
+| AWSManagedRulesCommonRuleSet | Block | OWASP Top 10, SQL injection, XSS |
+| AWSManagedRulesKnownBadInputsRuleSet | Block | Known malicious payloads |
+ 
+### API Gateway Security
+ 
+- **API Key required** on all endpoints (x-api-key header)
+- **Usage plan:** 5 req/sec rate, 10 burst, 1000 req/day quota
+- **CORS:** Configured on OPTIONS for /invoke and /status/{taskId}
+### IAM -- Least Privilege
+ 
+All broad managed policies (FullAccess) replaced with scoped inline policies:
+ 
+| Role | Scoped To |
+|---|---|
+| agenticops-lambda-execution-role | Specific agent ARNs, specific DynamoDB tables, specific SQS queues, specific SSM paths |
+| agenticops-bedrock-agent-role | Specific KB ARN, specific guardrail ARN, specific S3 bucket |
+| agenticops-stepfunctions-role | agenticops-* Lambda functions only |
+ 
+### Lambda DLQ
+ 
+Failed Lambda invocations route to `agenticops-lambda-dlq`. Zero tolerance -- any message = incident.
+ 
+---
+ 
+## API Reference
+ 
+**Base URL:** `https://ipm0lawtc7.execute-api.us-east-1.amazonaws.com/dev`
+ 
+**Required header:** `x-api-key: <key-from-ssm:/agenticops/apigateway/api-key-value>`
+ 
+### Get API Key
+ 
+```bash
+aws ssm get-parameter --name "/agenticops/apigateway/api-key-value" \
+  --with-decryption --query "Parameter.Value" --output text --region us-east-1
+```
+ 
+### POST /invoke (Async)
+ 
+```bash
+curl -X POST https://ipm0lawtc7.execute-api.us-east-1.amazonaws.com/dev/invoke \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: YOUR_API_KEY" \
+  -d '{"task": "What should I do when CPU is critically high?", "async": true}'
+ 
+# Response 202
+{"taskId": "task-abc123", "status": "queued", "pollUrl": "/status/task-abc123"}
+```
+ 
+### GET /status/{taskId}
+ 
+```bash
+curl https://ipm0lawtc7.execute-api.us-east-1.amazonaws.com/dev/status/task-abc123 \
+  -H "x-api-key: YOUR_API_KEY"
+ 
+# Response when completed
+{"taskId": "task-abc123", "status": "completed", "result": "Full agent response..."}
+```
+ 
+### Direct Python Invocation (bypasses API Gateway)
+ 
+```python
+import boto3
+from botocore.config import Config
+ 
+config = Config(read_timeout=120, retries={"max_attempts": 3, "mode": "adaptive"})
+client = boto3.client("bedrock-agent-runtime", region_name="us-east-1", config=config)
+ 
+response = client.invoke_agent(
+    agentId="45BDFFSGGZ", agentAliasId="U4A49NOUEK",
+    sessionId="my-session-001",
+    inputText="What should I do when RDS connections are exhausted?"
+)
+for event in response["completion"]:
+    if "chunk" in event:
+        print(event["chunk"]["bytes"].decode("utf-8"), end="")
+```
+ 
+### Chat UI
+ 
+```bash
+cd flows && python3 -m http.server 8080
+# Open: http://localhost:8080/chat-ui.html
+# Always check Async checkbox -- API GW has 29s hard timeout
+```
+ 
+---
+ 
+## Observability
+ 
+### CloudWatch Dashboard: AgenticOps-Platform
+ 
+| Widget | Metrics | Watch For |
+|---|---|---|
+| Agent Invocation Errors | Lambda Errors (4 functions) | Any errors |
+| Lambda Duration p99 | Duration p99 (3 functions) | Approaching timeout limit |
+| SQS Queue Depth | Main queue + DLQ | DLQ > 0 = P0 |
+| Step Functions | Started / Succeeded / Failed | Any failures |
+| Bedrock Token Usage | Input + Output tokens/hour | Cost spike |
+| Bedrock Latency p99 | InvocationLatency (30s annotation) | > 30s = imminent timeouts |
+| DynamoDB Latency | PutItem/GetItem p99 | > 50ms = throttling |
+| Guardrail Interventions | Invocations + Blocked | Block spike = attack |
+ 
+### CloudWatch Alarms -- SNS -- Email
+ 
+| Alarm | Trigger | Severity |
+|---|---|---|
+| AgenticOps-AsyncConsumer-ErrorRate | Lambda errors > 3 in 5 min | High |
+| AgenticOps-DLQ-MessageCount | Async DLQ > 0 | P0 |
+| AgenticOps-LambdaDLQ-MessageCount | Lambda DLQ > 0 | P0 |
+| AgenticOps-StepFunctions-Failures | SFN failures >= 1 in 5 min | High |
+| AgenticOps-Bedrock-HighLatency | Bedrock p99 > 30s | High |
+ 
+### Cost Budget
+ 
+- Service: Amazon Bedrock
+- Limit: $50/month
+- Alert at 80% actual and 100% forecasted via SNS
+### Structured Logging (async-consumer)
+ 
+```
+# Find all failed tasks
+fields @timestamp, taskId, error, durationMs
+| filter event = "task_failed"
+| sort @timestamp desc
+ 
+# Average task duration
+filter event = "task_completed"
+| stats avg(durationMs) as avg_ms by bin(1h)
+```
+ 
+---
+ 
+## Production Readiness
+ 
+### Current Score: 7/10
+ 
+| Area | Score | Done | Missing |
+|---|---|---|---|
+| Security | 7/10 | Guardrail v1 pinned, IAM scoped, WAF, API key, usage plan | Cognito auth |
+| Reliability | 7/10 | Lambda DLQ, Bedrock adaptive retry, idempotent consumer | Agent alias version pinning |
+| Observability | 8/10 | 5 alarms + SNS, cost budget, structured logging, X-Ray | Agent trace logging |
+| Scalability | 5/10 | Usage plan throttling, WAF rate limiting | Lambda concurrency limits |
+| Operations | 7/10 | GitHub Actions CI/CD, SSM config | Dev/prod env separation |
+ 
+### Remaining P2 Items
+ 
+```
+Cognito User Pool authorizer on API Gateway
+Lambda concurrency limits (needs account limit increase)
+CloudFront + S3 for chat UI hosting
+Dev/prod SSM path separation
+Agent alias pinned to numbered versions
+Bedrock agent CloudWatch trace logging
+```
+ 
+---
+ 
+## Phase-by-Phase Build Log
+ 
+| Phase | Built | Key Decision |
+|---|---|---|
+| 1 | S3, DynamoDB, IAM, SSM, GitHub Actions | SSM from day one -- no hardcoded values |
+| 2 | Bedrock KB, AOSS, 9 docs, RAG validated | Switched S3 Vectors to AOSS (S3 Vectors buggy) |
+| 3 | IT Ops Agent, 3 Action Groups, KB attached | OpenAPI schemas in S3 for versioning |
+| 4 | Pipeline Agent, 3 Action Groups, KB attached | Shared KB, different system prompts |
+| 5 | Supervisor with SUPERVISOR mode, 2 collaborators | LLM-based routing via collaborator instructions |
+| 6 | SQS + DLQ, api-handler, async-consumer | Visibility timeout = Lambda timeout + 30s |
+| 7 | Step Functions parallel workflow, EventBridge | Pass state to reshape Parallel output array |
+| 8 | Bedrock Guardrail, PII/word/topic filters | Applied to input AND output layers |
+| 9 | X-Ray, CloudWatch dashboard, 4 alarms | DLQ alarm threshold = 0 (zero tolerance) |
+| 10 | API Gateway, status Lambda, chat UI | Always async -- API GW has 29s hard limit |
+| Prod | WAF, IAM scoping, API key, SNS, budget, DLQ, retry, CI/CD | Guardrail version pinned -- no DRAFT in production |
+ 
+### Key Bugs and Fixes
+ 
+| Bug | Root Cause | Fix |
+|---|---|---|
+| S3 Vectors metadata 2048-byte limit | Bedrock+S3Vectors integration bug | Switched to AOSS |
+| States.ReferencePathConflict | Parallel outputs array, cannot use ResultPath | Added ReshapeParallelOutput Pass state |
+| DynamoDB reserved keyword result | result is reserved in DynamoDB | ExpressionAttributeNames {"#r": "result"} |
+| Pipeline Lambda timeout | No SFN in account, slow empty response | try/except with graceful empty return |
+| API Gateway CORS Failed to fetch | OPTIONS integration response missing headers | update-integration-response CLI |
+| Guardrail on DRAFT version | Draft changes affect production immediately | Published version 1, pinned all agents |
+| IAM FullAccess policies | Over-permissive managed policies | Replaced with scoped inline policies |
+ 
+---
+ 
+## Setup Guide
+ 
+### Prerequisites
+ 
+- AWS CLI configured
+- Python 3.12
+- Git
+### GitHub Actions Secrets
+ 
+Add to GitHub -> Settings -> Secrets -> Actions:
+ 
+| Secret | Value |
+|---|---|
+| AWS_ACCESS_KEY_ID | IAM user access key |
+| AWS_SECRET_ACCESS_KEY | IAM user secret key |
+ 
+### Get All SSM Parameters
+ 
+```bash
+aws ssm get-parameters-by-path --path "/agenticops" --recursive \
+  --region us-east-1 --query "Parameters[].{Name:Name, Value:Value}" --output table
+```
+ 
+---
+ 
+## Testing
+ 
+### Test RAG
+ 
+```bash
+aws bedrock-agent-runtime retrieve \
+  --knowledge-base-id NLHMUXZM4R \
+  --retrieval-query '{"text": "what should I do when CPU utilization is high?"}' \
+  --retrieval-configuration '{"vectorSearchConfiguration": {"numberOfResults": 3}}' \
+  --region us-east-1 \
+  --query "retrievalResults[].{Score:score, Source:location.s3Location.uri}"
+```
+ 
+### Test Async API with API Key
+ 
+```bash
+API_KEY=$(aws ssm get-parameter --name "/agenticops/apigateway/api-key-value" \
+  --with-decryption --query "Parameter.Value" --output text --region us-east-1)
+ 
+TASK_ID=$(curl -s -X POST \
+  https://ipm0lawtc7.execute-api.us-east-1.amazonaws.com/dev/invoke \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{"task": "Diagnose RDS connection exhaustion", "async": true}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['taskId'])")
+ 
+echo "TaskId: $TASK_ID"
+ 
+for i in $(seq 1 36); do
+  STATUS=$(curl -s \
+    https://ipm0lawtc7.execute-api.us-east-1.amazonaws.com/dev/status/$TASK_ID \
+    -H "x-api-key: $API_KEY" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+  echo "[$((i*5))s] $STATUS"
+  [ "$STATUS" = "completed" ] && break
+  sleep 5
+done
+```
+ 
+### Check DLQ Health (both should be 0)
+ 
+```bash
+for queue in agenticops-async-tasks-dlq agenticops-lambda-dlq; do
+  COUNT=$(aws sqs get-queue-attributes \
+    --queue-url https://sqs.us-east-1.amazonaws.com/011528270076/$queue \
+    --attribute-names ApproximateNumberOfMessagesVisible \
+    --region us-east-1 \
+    --query "Attributes.ApproximateNumberOfMessagesVisible" --output text)
+  echo "$queue: $COUNT messages"
+done
+```
+ 
+---
+ 
+## Key Learnings
+ 
+### Bedrock
+- Inference profiles (us.*) required for newer Claude models
+- prepare-agent required after every config change
+- S3 Vectors has a 2048-byte per-record limit bug with Bedrock KB -- use AOSS
+- Guardrail DRAFT version affects production immediately -- always publish and pin
+- Collaborator instruction text is what the LLM uses to decide routing
+### Step Functions
+- Parallel state outputs an array -- use a Pass state to reshape before downstream Tasks
+- Standard workflow for tasks > 5 minutes -- Express has 5-minute hard limit
+### API Gateway
+- 29-second hard timeout -- cannot be increased, design async for all LLM calls
+- CORS needs 3 layers: OPTIONS method response + OPTIONS integration response + Lambda headers
+### IAM
+- AWSStepFunctionsFullAccess does NOT include Lambda invoke -- add separately
+- AmazonBedrockFullAccess does NOT include AOSS -- add aoss:* separately
+- Managed policies are broad -- always replace with scoped inline policies for production
+### DynamoDB
+- 570+ reserved keywords including result, status, name -- always use ExpressionAttributeNames
+- TTL is essential for task results -- prevents unbounded table growth
+### SQS
+- Visibility timeout MUST exceed Lambda timeout -- otherwise duplicate processing
+- DLQ depth = 0 is the only acceptable production state
+---
+ 
+## Cost Considerations
+ 
+| Service | Monthly Cost |
+|---|---|
+| OpenSearch Serverless | ~$350/month (2 OCU minimum) |
+| Claude Sonnet 4.6 | ~$3/M input tokens, ~$15/M output tokens |
+| WAF | ~$8/month (1 ACL + 3 rules) |
+| Lambda | ~$0 (free tier) |
+| DynamoDB | ~$0 (on-demand, low traffic) |
+| SQS | ~$0 (<1M requests/month free) |
+| Step Functions | $0.025/1000 state transitions |
+| API Gateway | $3.50/million API calls |
+ 
+**Tip:** Delete AOSS collection when not actively developing. KB config persists. Recreate when needed.
+ 
+---
+ 
+## SSM Parameter Reference
+ 
+```
+/agenticops/region                            = us-east-1
+/agenticops/s3/kb-docs-bucket                = agenticops-knowledge-base-docs
+/agenticops/s3/artifacts-bucket              = agenticops-artifacts
+/agenticops/dynamodb/session-table           = agenticops-session-state
+/agenticops/dynamodb/results-table           = agenticops-task-results
+/agenticops/sqs/async-tasks-url              = https://sqs...agenticops-async-tasks
+/agenticops/sqs/async-tasks-dlq-url          = https://sqs...agenticops-async-tasks-dlq
+/agenticops/sqs/lambda-dlq-arn               = arn:aws:sqs...agenticops-lambda-dlq
+/agenticops/bedrock/kb-id                    = NLHMUXZM4R
+/agenticops/bedrock/kb-datasource-id         = B3QL9TOORM
+/agenticops/bedrock/model-id                 = us.anthropic.claude-sonnet-4-6
+/agenticops/bedrock/guardrail-id             = nwnzhu0xw8xg
+/agenticops/bedrock/guardrail-version        = 1
+/agenticops/bedrock/itops-agent-id           = UQINWRUDBC
+/agenticops/bedrock/itops-agent-alias-id     = 4414KWRLQ8
+/agenticops/bedrock/pipeline-agent-id        = YGZ3D0T7HC
+/agenticops/bedrock/pipeline-agent-alias-id  = VDLDYWNPDK
+/agenticops/bedrock/supervisor-agent-id      = 45BDFFSGGZ
+/agenticops/bedrock/supervisor-agent-alias-id = U4A49NOUEK
+/agenticops/stepfunctions/workflow-arn       = arn:aws:states...agenticops-workflow
+/agenticops/apigateway/api-id                = ipm0lawtc7
+/agenticops/apigateway/api-url               = https://ipm0lawtc7.execute-api...
+/agenticops/apigateway/usage-plan-id         = <usage-plan-id>
+/agenticops/apigateway/api-key-id            = <api-key-id>
+/agenticops/apigateway/api-key-value         = <SecureString>
+/agenticops/waf/acl-id                       = 63a0086a-b7ef-45d3-b6a2-873866006ed3
+/agenticops/sns/alerts-arn                   = arn:aws:sns...agenticops-alerts
+```
+ 
 ---
 
 ## Cost Considerations
