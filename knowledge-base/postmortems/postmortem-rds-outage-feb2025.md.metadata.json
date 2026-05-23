@@ -1,0 +1,7 @@
+{
+  "metadataAttributes": {
+    "type": "postmortem",
+    "domain": "itops",
+    "sev": "critical"
+  }
+}
