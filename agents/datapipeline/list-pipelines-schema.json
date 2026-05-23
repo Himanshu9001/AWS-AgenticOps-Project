@@ -1,0 +1,42 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "List Pipelines",
+    "version": "1.0.0",
+    "description": "Lists available data pipelines across Step Functions and Glue"
+  },
+  "paths": {
+    "/list-pipelines": {
+      "get": {
+        "summary": "List all data pipelines",
+        "description": "Returns all available Step Functions state machines and Glue jobs. Use this to discover what pipelines exist before checking their status.",
+        "operationId": "listPipelines",
+        "parameters": [
+          {
+            "name": "pipelineType",
+            "in": "query",
+            "required": false,
+            "description": "Filter by pipeline type: stepfunctions, glue, or all",
+            "schema": {"type": "string", "enum": ["stepfunctions", "glue", "all"]}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of pipelines",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pipelineCount": {"type": "integer"},
+                    "pipelines": {"type": "array"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

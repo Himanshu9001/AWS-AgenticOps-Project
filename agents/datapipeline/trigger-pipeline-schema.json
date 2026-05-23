@@ -1,0 +1,61 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Trigger Pipeline",
+    "version": "1.0.0",
+    "description": "Starts or retries an approved data pipeline execution"
+  },
+  "paths": {
+    "/trigger-pipeline": {
+      "post": {
+        "summary": "Trigger a pipeline execution",
+        "description": "Starts or retries an approved pipeline. Only agenticops-kb-ingestion, agenticops-data-quality, and agenticops-db-backup-verifier are allowed.",
+        "operationId": "triggerPipeline",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["pipelineName", "pipelineType", "action"],
+                "properties": {
+                  "pipelineName": {
+                    "type": "string",
+                    "description": "Name of the pipeline to trigger"
+                  },
+                  "pipelineType": {
+                    "type": "string",
+                    "enum": ["stepfunctions", "glue"],
+                    "description": "Type of pipeline"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": ["start", "retry"],
+                    "description": "Whether to start fresh or retry last failed execution"
+                  },
+                  "inputPayload": {
+                    "type": "string",
+                    "description": "Optional JSON input payload for the pipeline execution"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Pipeline triggered successfully",
+            "content": {
+              "application/json": {
+                "schema": {"type": "object"}
+              }
+            }
+          },
+          "403": {
+            "description": "Pipeline not in allowed list"
+          }
+        }
+      }
+    }
+  }
+}

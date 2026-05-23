@@ -1,0 +1,43 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Get Pipeline Status",
+    "version": "1.0.0",
+    "description": "Gets execution history and current status of a data pipeline"
+  },
+  "paths": {
+    "/get-pipeline-status": {
+      "get": {
+        "summary": "Get pipeline execution status",
+        "description": "Returns the last 5 executions of a pipeline with status, duration, and error messages. Use this to diagnose pipeline failures.",
+        "operationId": "getPipelineStatus",
+        "parameters": [
+          {
+            "name": "pipelineName",
+            "in": "query",
+            "required": true,
+            "description": "Name of the pipeline to check",
+            "schema": {"type": "string"}
+          },
+          {
+            "name": "pipelineType",
+            "in": "query",
+            "required": true,
+            "description": "Type of pipeline: stepfunctions or glue",
+            "schema": {"type": "string", "enum": ["stepfunctions", "glue"]}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pipeline execution history",
+            "content": {
+              "application/json": {
+                "schema": {"type": "object"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
