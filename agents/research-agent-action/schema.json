@@ -1,0 +1,37 @@
+{
+  "openapi": "3.0.0",
+  "info": {"title": "WebResearch", "version": "1.0.0"},
+  "paths": {
+    "/webresearch": {
+      "post": {
+        "operationId": "webResearch",
+        "description": "Research a topic on the web and return synthesized answer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "The research question to investigate"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {"type": "object"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
