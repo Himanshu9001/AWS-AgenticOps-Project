@@ -12,8 +12,10 @@
 - [Phase 5 — Supervisor / Multi-Agent Issues](#phase-5--supervisor--multi-agent-issues)
 - [Phase 6 — Async Pipeline Issues](#phase-6--async-pipeline-issues)
 - [Phase 7 — Step Functions Issues](#phase-7--step-functions-issues)
-- [Phase 8 — Guardrails Issues](#phase-8--guardrails-issues)
 - [Phase 10 — API Gateway / CORS Issues](#phase-10--api-gateway--cors-issues)
+- [Research Agent Phase B — Dockerfile / Docker / ECR Issues](#research-agent-phase-b--dockerfile--docker--ecr-issues)
+- [Research Agent Phase C — ECS Fargate Issues](#research-agent-phase-c--ecs-fargate-issues)
+- [Research Agent Phase D — Bedrock Wiring Issues](#research-agent-phase-d--bedrock-wiring-issues)
 - [General AWS CLI Issues](#general-aws-cli-issues)
 - [Quick Diagnostic Commands](#quick-diagnostic-commands)
 
@@ -59,7 +61,6 @@ S3 Vectors has a hard 2048-byte limit on filterable metadata per vector record. 
 Abandoned S3 Vectors entirely. Deleted S3 vector bucket and index, recreated Knowledge Base with **OpenSearch Serverless** as the vector store.
 
 ```bash
-# Delete S3 vector index and bucket
 aws s3vectors delete-index \
   --vector-bucket-name agenticops-kb-vectors \
   --index-name agenticops-kb-index \
@@ -95,14 +96,13 @@ aws cloudtrail lookup-events \
   --output text | python3 -m json.tool
 ```
 
-CloudTrail showed `ValidationException` with the message:
+CloudTrail showed `ValidationException`:
 ```
 User: agenticops-kb-role is not authorized to perform: s3vectors:QueryVectors
 ```
 
 **Fix:**
 ```bash
-# Add OpenSearch managed policies
 aws iam attach-role-policy \
   --role-name agenticops-kb-role \
   --policy-arn arn:aws:iam::aws:policy/AmazonOpenSearchServiceFullAccess
@@ -111,7 +111,6 @@ aws iam attach-role-policy \
   --role-name agenticops-kb-role \
   --policy-arn arn:aws:iam::aws:policy/AmazonOpenSearchIngestionFullAccess
 
-# Add inline AOSS data plane policy
 aws iam put-role-policy \
   --role-name agenticops-kb-role \
   --policy-name agenticops-kb-aoss-inline \
@@ -172,9 +171,6 @@ Metadata files used DynamoDB-style typed format instead of Bedrock KB's flat key
 Regenerated all 9 metadata files with flat format and re-uploaded to S3.
 
 ```bash
-# Regenerate metadata
-bash /tmp/fix-metadata.sh
-
 # Re-upload metadata files only
 aws s3 cp knowledge-base/ s3://agenticops-knowledge-base-docs/ \
   --recursive \
@@ -184,7 +180,7 @@ aws s3 cp knowledge-base/ s3://agenticops-knowledge-base-docs/ \
 ```
 
 **Lesson:**
-Bedrock KB metadata format is flat key-value — not DynamoDB's typed format, not JSON Schema, not any other structured format. Always test with one document before bulk uploading.
+Bedrock KB metadata format is flat key-value only. Always test with one document before bulk uploading.
 
 ---
 
@@ -194,7 +190,7 @@ Bedrock KB metadata format is flat key-value — not DynamoDB's typed format, no
 After running `aws s3 rm` to remove metadata files, all 9 `.md` documents were also deleted.
 
 **Root Cause:**
-`aws s3 rm --include "*.metadata.json"` without `--exclude "*"` first defaults to deleting ALL files then including only metadata — the flag order matters.
+`aws s3 rm --include "*.metadata.json"` without `--exclude "*"` first defaults to deleting ALL files.
 
 **Wrong command:**
 ```bash
@@ -212,7 +208,6 @@ aws s3 rm s3://agenticops-knowledge-base-docs/ \
 ```
 
 **Fix:**
-Re-uploaded all documents:
 ```bash
 aws s3 cp knowledge-base/ s3://agenticops-knowledge-base-docs/ \
   --recursive \
@@ -222,7 +217,7 @@ aws s3 cp knowledge-base/ s3://agenticops-knowledge-base-docs/ \
 ```
 
 **Lesson:**
-`aws s3 rm/cp` flag order is critical. `--exclude` must always come before `--include`. Always do a dry-run check with `aws s3 ls` before destructive S3 operations. Versioning was enabled on the KB bucket — in future, use `aws s3api list-object-versions` to recover accidentally deleted objects.
+`aws s3 rm/cp` flag order is critical. `--exclude` must always come before `--include`. Always do a dry-run check with `aws s3 ls` before destructive S3 operations.
 
 ---
 
@@ -234,7 +229,7 @@ aws s3 cp knowledge-base/ s3://agenticops-knowledge-base-docs/ \
 ```
 
 **Root Cause:**
-The S3 bucket was empty when the ingestion ran (from Issue 5 above). The job completed successfully but found nothing to index.
+The S3 bucket was empty when the ingestion ran (from Issue 5 above).
 
 **Fix:**
 Re-upload documents, trigger new ingestion job.
@@ -256,25 +251,21 @@ throughput isn't supported. Retry your request with the ID or ARN of an inferenc
 Newer Claude models require inference profiles (cross-region routing) instead of direct model IDs.
 
 **Fix:**
-Use inference profile ID instead of foundation model ID:
-
 ```bash
 # Wrong
 "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-5..."
 
 # Correct
 "modelArn": "arn:aws:bedrock:us-east-1:011528270076:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-```
 
-List available inference profiles:
-```bash
+# List available inference profiles
 aws bedrock list-inference-profiles \
   --region us-east-1 \
-  --query "inferenceProfileSummaries[?contains(inferenceProfileId, 'claude-sonnet')].{ID:inferenceProfileId, Name:inferenceProfileName}"
+  --query "inferenceProfileSummaries[?contains(inferenceProfileId, 'claude-sonnet')].{ID:inferenceProfileId}"
 ```
 
 **Lesson:**
-AWS Bedrock inference profiles (`us.*` prefix) route across multiple US regions for higher availability and throughput. Always use the versioned inference profile ARN in production — never the short alias or foundation model ID directly.
+Always use the versioned inference profile ARN (`us.*` prefix) in production — never the short alias or foundation model ID directly.
 
 ---
 
@@ -290,14 +281,11 @@ ValidationException: You must specify a value for roleArn and roleSessionName
 ```
 
 **Root Cause:**
-Two sub-issues:
-1. The `agenticops-bedrock-agent-role` trust policy only had `bedrock.amazonaws.com` — missing the agents service principal
-2. The role hadn't been saved/associated with the agent before creating action groups
+The agent role hadn't been explicitly saved/associated with the agent before creating action groups.
 
 **Fix:**
-
-First, save the agent with explicit role ARN:
 ```bash
+# Save agent with explicit role ARN first
 aws bedrock-agent update-agent \
   --agent-id "UQINWRUDBC" \
   --agent-name "agenticops-itops-agent" \
@@ -305,10 +293,8 @@ aws bedrock-agent update-agent \
   --foundation-model "us.anthropic.claude-sonnet-4-6" \
   --instruction "..." \
   --region us-east-1
-```
 
-Then add Lambda invoke permission to agent role:
-```bash
+# Add Lambda invoke permission to agent role
 aws iam put-role-policy \
   --role-name agenticops-bedrock-agent-role \
   --policy-name agenticops-agent-lambda-invoke \
@@ -320,10 +306,8 @@ aws iam put-role-policy \
       "Resource": "arn:aws:lambda:us-east-1:011528270076:function:agenticops-*"
     }]
   }'
-```
 
-Then add Lambda resource-based policy:
-```bash
+# Add Lambda resource-based policy
 aws lambda add-permission \
   --function-name agenticops-itops-get-alarms \
   --statement-id bedrock-agent-invoke \
@@ -334,15 +318,11 @@ aws lambda add-permission \
 ```
 
 **Lesson:**
-Bedrock Agents need permissions at two levels:
-- **Identity-based policy** on the agent role → `lambda:InvokeFunction`
-- **Resource-based policy** on the Lambda → allows `bedrock.amazonaws.com` principal
-
-Both are required. Missing either one causes the cryptic "roleArn and roleSessionName" error.
+Bedrock Agents need permissions at two levels — identity-based policy on the agent role AND resource-based policy on the Lambda. Both are required.
 
 ---
 
-### Issue 9: Console Error — "Must save agent with Agent Resource Role before adding Action Group from S3"
+### Issue 9: Console — "Must save agent with Agent Resource Role before adding Action Group from S3"
 
 **Symptom:**
 Console showed error when trying to add Action Group with S3 schema before the agent role was explicitly saved.
@@ -369,7 +349,7 @@ authorized to perform: states:ListStateMachines
 ```
 
 **Root Cause:**
-`agenticops-lambda-execution-role` was created with broad managed policies (`AmazonSQSFullAccess`, `AmazonDynamoDBFullAccess`) but did NOT include Step Functions, Glue, EC2, RDS, or SSM permissions needed by the action group Lambdas.
+`agenticops-lambda-execution-role` did NOT include Step Functions, Glue, EC2, RDS, or SSM permissions.
 
 **Fix:**
 ```bash
@@ -378,35 +358,24 @@ aws iam put-role-policy \
   --policy-name agenticops-lambda-pipeline-permissions \
   --policy-document '{
     "Version": "2012-10-17",
-    "Statement": [
-      {
-        "Effect": "Allow",
-        "Action": [
-          "states:ListStateMachines",
-          "states:ListExecutions",
-          "states:StartExecution",
-          "states:DescribeExecution",
-          "states:DescribeStateMachine",
-          "glue:GetJobs",
-          "glue:GetJobRuns",
-          "glue:StartJobRun",
-          "glue:GetJobRun",
-          "cloudwatch:DescribeAlarms",
-          "cloudwatch:GetMetricStatistics",
-          "ec2:DescribeInstances",
-          "rds:DescribeDBInstances",
-          "ssm:SendCommand",
-          "autoscaling:DescribeAutoScalingGroups",
-          "autoscaling:SetDesiredCapacity"
-        ],
-        "Resource": "*"
-      }
-    ]
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": [
+        "states:ListStateMachines", "states:ListExecutions",
+        "states:StartExecution", "states:DescribeExecution",
+        "glue:GetJobs", "glue:GetJobRuns", "glue:StartJobRun",
+        "cloudwatch:DescribeAlarms", "cloudwatch:GetMetricStatistics",
+        "ec2:DescribeInstances", "rds:DescribeDBInstances",
+        "ssm:SendCommand", "autoscaling:DescribeAutoScalingGroups",
+        "autoscaling:SetDesiredCapacity"
+      ],
+      "Resource": "*"
+    }]
   }'
 ```
 
 **Lesson:**
-`AWSLambdaBasicExecutionRole` only grants CloudWatch Logs access. Every AWS API your Lambda calls needs explicit IAM permission. Always test Lambda functions individually before wiring them to agents to catch permission issues early.
+`AWSLambdaBasicExecutionRole` only grants CloudWatch Logs access. Every AWS API needs explicit IAM permission. Test Lambda functions individually before wiring to agents.
 
 ---
 
@@ -418,11 +387,9 @@ urllib3.exceptions.ReadTimeoutError: AWSHTTPSConnectionPool: Read timed out.
 ```
 
 **Root Cause:**
-The `agenticops-pipeline-list` Lambda called `list_state_machines()` which returned no results (no Step Functions in the account). The Bedrock agent ReAct loop stalled waiting for meaningful data, eventually causing the boto3 client to timeout.
+`list_state_machines()` returned no results — no Step Functions in the account. The Bedrock agent ReAct loop stalled waiting for meaningful data.
 
 **Fix:**
-Added try/except with graceful empty response so the Lambda always returns quickly:
-
 ```python
 if pipeline_type in ["all", "stepfunctions"]:
     try:
@@ -432,11 +399,9 @@ if pipeline_type in ["all", "stepfunctions"]:
     except Exception as e:
         pipelines.append({"type": "stepfunctions", "error": str(e)})
 
-# Always return something even if empty
 return {
     "messageVersion": "1.0",
     "response": {
-        ...
         "body": json.dumps({
             "pipelineCount": len(pipelines),
             "pipelines": pipelines,
@@ -446,15 +411,8 @@ return {
 }
 ```
 
-Also added longer timeout to boto3 client:
-```python
-from botocore.config import Config
-config = Config(read_timeout=120, connect_timeout=10)
-client = boto3.client("bedrock-agent-runtime", region_name="us-east-1", config=config)
-```
-
 **Lesson:**
-Action Group Lambdas must always return a response quickly — even if the result is empty. The Bedrock agent cannot proceed until the Lambda responds. Design Lambdas to handle empty/no-resource scenarios gracefully with an informative message rather than hanging.
+Action Group Lambdas must always return a response quickly — even if the result is empty. Handle empty/no-resource scenarios gracefully with an informative message rather than hanging.
 
 ---
 
@@ -471,29 +429,21 @@ attribute is set to SUPERVISOR_ROUTER but no agent collaborators are added.
 ```
 
 **Root Cause:**
-Set both specialist agents to `SUPERVISOR_ROUTER` collaboration mode — but this mode is for agents that ARE supervisors, not for agents that ARE being supervised.
+Set both specialist agents to `SUPERVISOR_ROUTER` collaboration mode — this mode is for agents that ARE supervisors, not agents being supervised.
 
 **Fix:**
-Specialist agents should remain `DISABLED`. Only the Supervisor gets `SUPERVISOR` mode.
-
 ```bash
-# Revert specialist agents to DISABLED
-aws bedrock-agent update-agent \
-  --agent-id "UQINWRUDBC" \
-  --agent-collaboration "DISABLED" \
-  ... other params ...
+# Specialist agents → DISABLED
+aws bedrock-agent update-agent --agent-id "UQINWRUDBC" --agent-collaboration "DISABLED" ...
 
-# Supervisor gets SUPERVISOR mode
-aws bedrock-agent update-agent \
-  --agent-id "45BDFFSGGZ" \
-  --agent-collaboration "SUPERVISOR" \
-  ... other params ...
+# Supervisor only → SUPERVISOR
+aws bedrock-agent update-agent --agent-id "45BDFFSGGZ" --agent-collaboration "SUPERVISOR" ...
 ```
 
-**Collaboration modes explained:**
+**Collaboration modes:**
 | Mode | Used By | Meaning |
 |---|---|---|
-| `DISABLED` | Specialist agents | Can be called as collaborator but cannot delegate further |
+| `DISABLED` | Specialist agents | Can be called as collaborator, cannot delegate further |
 | `SUPERVISOR` | Supervisor agent | Can delegate to registered collaborators |
 | `SUPERVISOR_ROUTER` | Not used in this project | Supervisor that only routes, does no work itself |
 
@@ -507,26 +457,18 @@ MalformedPolicyDocument: Invalid principal in policy: "SERVICE":"bedrock-agent.a
 ```
 
 **Root Cause:**
-Attempted to add `bedrock-agent.amazonaws.com` as a separate trust policy statement — this service principal does not exist.
+`bedrock-agent.amazonaws.com` does not exist as a service principal.
 
 **Fix:**
-The correct trust policy uses only `bedrock.amazonaws.com` which covers all Bedrock services including agents:
-
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": {
-      "Service": "bedrock.amazonaws.com"
-    },
-    "Action": "sts:AssumeRole"
-  }]
+  "Principal": {"Service": "bedrock.amazonaws.com"},
+  "Action": "sts:AssumeRole"
 }
 ```
 
 **Lesson:**
-`bedrock.amazonaws.com` is the single service principal for all Bedrock services. There is no separate `bedrock-agent.amazonaws.com` principal.
+`bedrock.amazonaws.com` is the single service principal for all Bedrock services including agents.
 
 ---
 
@@ -544,11 +486,9 @@ reserved keyword: result
 ```
 
 **Root Cause:**
-`result` is one of 570+ DynamoDB reserved keywords. Using it directly in `UpdateExpression` causes a parse error.
+`result` is one of 570+ DynamoDB reserved keywords.
 
 **Fix:**
-Use `ExpressionAttributeNames` to alias reserved keywords:
-
 ```python
 # Wrong
 table.update_item(
@@ -561,22 +501,15 @@ table.update_item(
 table.update_item(
     Key={"taskId": task_id},
     UpdateExpression="SET #s = :s, #r = :r",
-    ExpressionAttributeNames={
-        "#s": "status",
-        "#r": "result"    # alias for reserved word
-    },
-    ExpressionAttributeValues={
-        ":s": "completed",
-        ":r": agent_result
-    }
+    ExpressionAttributeNames={"#s": "status", "#r": "result"},
+    ExpressionAttributeValues={":s": "completed", ":r": agent_result}
 )
 ```
 
-**Common reserved DynamoDB keywords to watch out for:**
-`name`, `status`, `result`, `value`, `data`, `type`, `key`, `size`, `count`, `date`, `time`, `index`, `range`, `table`
+**Common reserved keywords:** `name`, `status`, `result`, `value`, `data`, `type`, `key`, `size`, `count`, `date`, `time`, `index`, `range`, `table`
 
 **Lesson:**
-Always use `ExpressionAttributeNames` for any attribute that might be a reserved word. Better practice: prefix all attribute names with your app name (`ag_result`, `ag_status`) to avoid conflicts entirely.
+Always use `ExpressionAttributeNames` for attribute names. Better: prefix all attribute names with your app (`ag_result`, `ag_status`) to avoid conflicts entirely.
 
 ---
 
@@ -586,11 +519,9 @@ Always use `ExpressionAttributeNames` for any attribute that might be a reserved
 Task submitted successfully (got `taskId`) but status poll returned `{"status": "not_found"}` even after 30 seconds.
 
 **Root Cause:**
-The polling script started checking before the consumer Lambda had written the initial `queued` status to DynamoDB. The timing between SQS delivery and DynamoDB write was slower than expected.
+Polling started before consumer Lambda had written the initial `queued` status to DynamoDB.
 
 **Fix:**
-Wait at least 5 seconds before first poll, and use a polling interval of 5 seconds minimum:
-
 ```python
 time.sleep(5)  # wait for initial write
 
@@ -601,8 +532,6 @@ for i in range(36):  # poll up to 3 minutes
         break
     time.sleep(5)
 ```
-
-**Also check:** The `api-handler` Lambda writes `queued` status to DynamoDB before returning. If DynamoDB write fails silently, the task appears in SQS but not in DynamoDB. Add logging to confirm.
 
 ---
 
@@ -619,7 +548,7 @@ is not authorized to perform: lambda:InvokeFunction
 ```
 
 **Root Cause:**
-`AWSStepFunctionsFullAccess` managed policy grants Step Functions management plane permissions but NOT the ability to invoke Lambda functions. These are separate IAM actions.
+`AWSStepFunctionsFullAccess` grants management plane permissions but NOT the ability to invoke Lambda functions.
 
 **Fix:**
 ```bash
@@ -637,7 +566,7 @@ aws iam put-role-policy \
 ```
 
 **Lesson:**
-`AWSStepFunctionsFullAccess` only manages Step Functions resources — it does not grant cross-service permissions. Each service integration (Lambda, DynamoDB, SNS, etc.) needs its own IAM permission on the Step Functions execution role.
+`AWSStepFunctionsFullAccess` only manages Step Functions resources. Each service integration needs its own IAM permission on the execution role.
 
 ---
 
@@ -650,12 +579,11 @@ ExecutionFailed: States.ReferencePathConflict: Unable to apply step
 ```
 
 **Root Cause:**
-The `Parallel` state outputs an **array** (one element per branch). The `AggregateResults` state tried to use `ResultPath: "$.aggregatedResult"` to merge into the original input — but the original input was now an array, not an object. You cannot add a key to an array.
+`Parallel` state outputs an **array**. `AggregateResults` tried to use `ResultPath: "$.aggregatedResult"` to merge into the original input — but the original input was now an array, not an object.
 
 **Wrong state definition:**
 ```json
 "AggregateResults": {
-  "Type": "Task",
   "Parameters": {
     "sessionId.$": "$[0].sessionId"   // BUG: JSONPath into array
   },
@@ -670,8 +598,8 @@ Add a `Pass` state between `Parallel` and `AggregateResults` to reshape the arra
 "ReshapeParallelOutput": {
   "Type": "Pass",
   "Parameters": {
-    "parallelResults.$": "$",     // capture the array as a named field
-    "sessionId": "sfn-session"    // add static session ID
+    "parallelResults.$": "$",
+    "sessionId": "sfn-session"
   },
   "Next": "AggregateResults"
 },
@@ -679,21 +607,20 @@ Add a `Pass` state between `Parallel` and `AggregateResults` to reshape the arra
   "Type": "Task",
   "Parameters": {
     "FunctionName": "agenticops-aggregate-results",
-    "Payload.$": "$"              // now $ is an object, not an array
+    "Payload.$": "$"
   },
   "Next": "WorkflowComplete"
 }
 ```
 
 **Lesson:**
-The `Parallel` state always outputs an **array** — one element per branch, in branch order. If you need to use the results downstream as named fields, always add a `Pass` state with `Parameters` to reshape the output before the next `Task` state.
+The `Parallel` state ALWAYS outputs an array — one element per branch. Always add a `Pass` state to reshape before the next `Task` state.
 
 ---
 
 ### Issue 18: Unreachable `WorkflowFailed` State
 
 **Symptom:**
-Console showed red underline on `WorkflowFailed` state with error:
 ```
 The state cannot be reached. It must be referenced by at least one other state.
 ```
@@ -702,28 +629,24 @@ The state cannot be reached. It must be referenced by at least one other state.
 After removing `Catch` blocks that previously routed to `WorkflowFailed`, the state became unreachable.
 
 **Fix:**
-Delete the `WorkflowFailed` state entirely from the JSON definition since no state transitioned to it.
+Delete the `WorkflowFailed` state entirely from the JSON definition.
 
 **Lesson:**
-Step Functions validates at save time that every non-start state is reachable. When refactoring state machines, remove states that lose all incoming transitions.
+Step Functions validates at save time that every non-start state is reachable. Remove states that lose all incoming transitions.
 
 ---
 
 ### Issue 19: EventBridge UI Confusion — Scheduler vs Rules
 
 **Symptom:**
-Navigating to EventBridge and clicking "Create" opened the EventBridge Scheduler (drag-and-drop canvas) instead of the Rules creation form.
-
-**Root Cause:**
-AWS EventBridge now has three separate constructs — Event Buses, Rules, and Pipes/Scheduler — each with its own creation flow. The default landing page changed.
+Clicking "Create" in EventBridge opened the Scheduler canvas instead of Rules form.
 
 **Fix:**
-Navigate explicitly to **EventBridge → Rules** in the left sidebar, then click **Create rule**. Or use direct URL:
+Navigate explicitly to **EventBridge → Rules** in the left sidebar or use:
 ```
 https://us-east-1.console.aws.amazon.com/events/home?region=us-east-1#/rules/create
 ```
 
-**When to use which:**
 | Construct | Use For |
 |---|---|
 | **Rules** | Event pattern matching → trigger targets (our use case) |
@@ -739,10 +662,10 @@ https://us-east-1.console.aws.amazon.com/events/home?region=us-east-1#/rules/cre
 ### Issue 20: API Gateway Sync Timeout — `Failed to fetch`
 
 **Symptom:**
-Sync API call (`async: false`) hung for 29 seconds then returned `Failed to fetch` in browser.
+Sync API call hung for 29 seconds then returned `Failed to fetch` in browser.
 
 **Root Cause:**
-API Gateway has a hard maximum timeout of 29 seconds. Agent invocations typically take 45-60 seconds. The request timed out before the agent responded.
+API Gateway has a hard maximum timeout of 29 seconds. Agent invocations take 45-60 seconds.
 
 **Fix:**
 Always use `async: true` for agent queries through API Gateway:
@@ -762,7 +685,7 @@ const {taskId} = await response.json();
 ```
 
 **Lesson:**
-API Gateway's 29-second timeout cannot be increased. For any LLM-backed endpoint, always use the async pattern: submit → get taskId → poll for result.
+API Gateway's 29-second timeout cannot be increased. Always design with async pattern for LLM-backed endpoints.
 
 ---
 
@@ -772,31 +695,26 @@ API Gateway's 29-second timeout cannot be increased. For any LLM-backed endpoint
 Chat UI showed `Error: Failed to fetch` when calling API Gateway from browser. curl worked fine.
 
 **Root Cause:**
-Two compounding issues:
 1. Opening `chat-ui.html` via `file://` protocol triggers stricter browser CORS enforcement
 2. API Gateway OPTIONS method response was not returning CORS headers
 
 **Diagnosis:**
 ```bash
-# Check if CORS headers are present in OPTIONS response
 curl -X OPTIONS https://ipm0lawtc7.execute-api.us-east-1.amazonaws.com/dev/invoke \
   -H "Origin: http://localhost:8080" \
   -H "Access-Control-Request-Method: POST" \
   -v 2>&1 | grep "access-control"
+# If no access-control-* headers → integration response not configured
 ```
 
-If no `access-control-*` headers in response → integration response not configured.
-
-**Fix — Serve via HTTP instead of file://**
+**Fix — Serve via HTTP:**
 ```bash
-cd flows
-python3 -m http.server 8080
+cd flows && python3 -m http.server 8080
 # Open http://localhost:8080/chat-ui.html
 ```
 
-**Fix — Configure CORS integration response via CLI**
+**Fix — Configure CORS integration response:**
 ```bash
-# Add integration response with CORS headers
 aws apigateway put-integration-response \
   --rest-api-id ipm0lawtc7 \
   --resource-id 8wu6r9 \
@@ -809,20 +727,16 @@ aws apigateway put-integration-response \
   }' \
   --region us-east-1
 
-# Redeploy
-aws apigateway create-deployment \
-  --rest-api-id ipm0lawtc7 \
-  --stage-name dev \
-  --region us-east-1
+aws apigateway create-deployment --rest-api-id ipm0lawtc7 --stage-name dev --region us-east-1
 ```
 
-**CORS requires 3 configuration layers in API Gateway:**
+**CORS requires 3 configuration layers:**
 1. OPTIONS method response (declares which headers are allowed)
 2. OPTIONS integration response (sets the actual header values)
 3. Lambda response headers (for actual POST/GET responses)
 
 **Lesson:**
-Never open HTML files via `file://` for API testing — always serve via `http://localhost`. CORS is a browser security feature and only applies to browser-originated requests (not curl, Python, Postman).
+Never open HTML files via `file://` for API testing — always serve via `http://localhost`.
 
 ---
 
@@ -834,11 +748,9 @@ Failed to update CORS headers on 2 methods
 ```
 
 **Root Cause:**
-The console's "Enable CORS" button failed because OPTIONS methods already existed from a previous attempt. The button tries to create method responses that already existed, causing a conflict.
+OPTIONS methods already existed from a previous attempt. The button tried to create method responses that already existed.
 
 **Fix:**
-Use CLI to update the existing integration response directly:
-
 ```bash
 aws apigateway update-integration-response \
   --rest-api-id ipm0lawtc7 \
@@ -851,7 +763,557 @@ aws apigateway update-integration-response \
 ```
 
 **Lesson:**
-When the API Gateway console fails for CORS configuration, use the CLI. The console "Enable CORS" button is a convenience wrapper that fails gracefully when resources already exist. Use `update-integration-response` instead of `put-integration-response` when the resource already exists.
+Use `update-integration-response` instead of `put-integration-response` when the resource already exists.
+
+---
+
+## Research Agent Phase B — Dockerfile / Docker / ECR Issues
+
+---
+
+### Issue 26: Docker Build Failed — Dependency Version Conflict
+
+**Symptom:**
+```
+ERROR: Cannot install langgraph 0.2.0 and langchain-core==0.3.0 because
+these package versions have conflicting dependencies.
+langgraph 0.2.0 depends on langchain-core<0.3 and >=0.2.27
+```
+
+**Root Cause:**
+Pinned exact versions (`==`) caused a conflict between `langgraph` and `langchain-core`.
+
+**Fix:**
+Switch from exact pins to minimum version constraints:
+
+```
+# Wrong
+langgraph==0.2.0
+langchain-core==0.3.0
+
+# Correct
+langgraph>=0.2.0
+langchain-aws>=0.2.0
+langchain-core>=0.2.27
+fastapi==0.115.0
+uvicorn==0.30.0
+tavily-python>=0.5.0
+boto3>=1.35.0
+```
+
+**Lesson:**
+LangChain ecosystem packages have tight inter-dependencies that change frequently. Use `>=` not `==` for LangChain/LangGraph packages. Only pin exact versions for packages with stable APIs (fastapi, uvicorn).
+
+---
+
+### Issue 27: Docker buildx No Network Access — DNS Failure
+
+**Symptom:**
+```
+WARNING: Retrying (Retry(total=4...)) after connection broken by
+'NewConnectionError': Failed to establish a new connection: [Errno -2]
+Name or service not known
+ERROR: Could not find a version that satisfies the requirement fastapi==0.115.0
+```
+
+**Root Cause:**
+Colima (Docker runtime on Mac) was stopped and restarted, losing DNS configuration inside the buildx container. buildx uses a separate builder container that doesn't inherit the host network DNS settings.
+
+**Fix:**
+```bash
+# Restart Colima with explicit DNS
+colima stop
+colima start --dns 8.8.8.8
+
+# Use regular docker build instead of buildx for Colima compatibility
+docker build \
+  --platform linux/amd64 \
+  --tag 011528270076.dkr.ecr.us-east-1.amazonaws.com/agenticops-research-agent:latest \
+  --no-cache \
+  .
+```
+
+**Lesson:**
+buildx uses a separate builder container — DNS issues in the host don't automatically fix it. For Colima, restart with `--dns 8.8.8.8` or use regular `docker build --platform` which shares the host network.
+
+---
+
+### Issue 28: ECS Task Permission Denied on Uvicorn Startup
+
+**Symptom:**
+```
+/usr/local/bin/python3.12: can't open file '/root/.local/bin/uvicorn':
+[Errno 13] Permission denied
+```
+
+**Root Cause:**
+The original multi-stage Dockerfile used `pip install --user` in the builder stage, which installs packages to `/root/.local`. The final image switched to a non-root user `agenticops` (UID 1000) who cannot access `/root/.local` which is owned by root.
+
+**Wrong Dockerfile:**
+```dockerfile
+FROM python:3.12-slim AS builder
+RUN pip install --no-cache-dir --user -r requirements.txt  # installs to /root/.local
+
+FROM python:3.12-slim
+COPY --from=builder /root/.local /root/.local   # owned by root
+USER agenticops                                  # can't access /root/.local
+```
+
+**Fix:**
+Remove multi-stage build. Install packages system-wide (no `--user` flag):
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt   # system-wide to /usr/local
+
+COPY app/ ./app/
+
+RUN useradd -m -u 1000 agenticops && chown -R agenticops:agenticops /app
+USER agenticops
+
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]
+```
+
+**Lesson:**
+Multi-stage builds with `--user` pip install break when switching to non-root in the final stage. For non-root containers, always install packages system-wide or explicitly set ownership with `COPY --chown`.
+
+---
+
+### Issue 29: ECR Push Failing — Wrong Repository Name (Shell Variable Stale)
+
+**Symptom:**
+```
+error from registry: The repository with name 'agenticops-research-agentatest'
+does not exist in the registry with id '011528270076'
+```
+
+**Root Cause:**
+Shell variable `$ECR_URI` had a stale wrong value (`agenticops-research-agentatest`) from an earlier failed attempt. Docker built and tagged the image with the wrong repository name using this variable.
+
+**Diagnosis:**
+```bash
+echo "Current ECR_URI: '$ECR_URI'"
+# Showed: agenticops-research-agentatest (wrong — should be agenticops-research-agent)
+
+docker images | grep agenticops
+# Showed the wrong tag was applied to the built image
+```
+
+**Fix — Retag existing image without rebuilding:**
+```bash
+# Retag to correct URI
+docker tag \
+  011528270076.dkr.ecr.us-east-1.amazonaws.com/agenticops-research-agentatest:latest \
+  011528270076.dkr.ecr.us-east-1.amazonaws.com/agenticops-research-agent:latest
+
+# Push with correct tag
+docker push 011528270076.dkr.ecr.us-east-1.amazonaws.com/agenticops-research-agent:latest
+```
+
+**Prevention — Always hardcode ECR URI:**
+```bash
+# Wrong — relies on shell variable
+docker build --tag $ECR_URI:latest .
+
+# Correct — hardcoded URI
+docker build \
+  --tag 011528270076.dkr.ecr.us-east-1.amazonaws.com/agenticops-research-agent:v2 \
+  --platform linux/amd64 .
+```
+
+**Lesson:**
+Never use shell variables for ECR URI in docker build/tag/push commands. Hardcode the full URI. A stale variable is invisible and causes exactly this failure.
+
+---
+
+## Research Agent Phase C — ECS Fargate Issues
+
+---
+
+### Issue 30: ECS Task Definition Baked Wrong Image URI (Revisions 1-3)
+
+**Symptom:**
+```
+(service agenticops-research-agent) was unable to place a task.
+Reason: CannotPullContainerError: pull image manifest has been retried 7 time(s):
+failed to resolve ref agenticops-research-agentatest:latest: not found.
+```
+
+**Root Cause:**
+Task definition revisions 1-3 were registered while `$ECR_URI` had the wrong value, baking `agenticops-research-agentatest` into the container definition. ECS was trying to pull from a repository that didn't exist.
+
+**Diagnosis:**
+```bash
+# Check what image URI is in the current task definition
+aws ecs describe-task-definition \
+  --task-definition agenticops-research-agent \
+  --region us-east-1 \
+  --query "taskDefinition.containerDefinitions[0].image"
+# Returned: "agenticops-research-agentatest:latest" -- wrong
+```
+
+**Fix:**
+Register a new task definition revision with the correct hardcoded URI:
+
+```bash
+aws ecs register-task-definition \
+  --family agenticops-research-agent \
+  --network-mode awsvpc \
+  --requires-compatibilities FARGATE \
+  --cpu 512 --memory 1024 \
+  --execution-role-arn arn:aws:iam::011528270076:role/agenticops-ecs-task-execution-role \
+  --task-role-arn arn:aws:iam::011528270076:role/agenticops-ecs-task-role \
+  --container-definitions '[{"name":"research-agent","image":"011528270076.dkr.ecr.us-east-1.amazonaws.com/agenticops-research-agent:v2",...}]' \
+  --region us-east-1 \
+  --query "taskDefinition.{Revision:revision, Image:containerDefinitions[0].image}"
+
+# Update service to new revision
+aws ecs update-service \
+  --cluster agenticops-cluster \
+  --service agenticops-research-agent \
+  --task-definition agenticops-research-agent:5 \
+  --force-new-deployment \
+  --region us-east-1
+```
+
+**Lesson:**
+Always verify the image URI in the task definition before deploying. Add this check to any deployment script:
+```bash
+aws ecs describe-task-definition --task-definition agenticops-research-agent \
+  --query "taskDefinition.containerDefinitions[0].image"
+```
+
+---
+
+### Issue 31: ECS Task Stuck Pending — No Default VPC
+
+**Symptom:**
+```bash
+VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" ...)
+VPC: None
+# Subnets: (empty)
+```
+
+**Root Cause:**
+The default VPC had been previously deleted from the account. Without a VPC, ECS tasks cannot be placed.
+
+**Fix:**
+```bash
+# Recreate the default VPC
+aws ec2 create-default-vpc --region us-east-1
+
+# Wait for subnets to be created
+sleep 10
+
+VPC_ID="vpc-054fbd3d56cb3761a"
+SUBNET_IDS=$(aws ec2 describe-subnets \
+  --filters "Name=vpc-id,Values=$VPC_ID" \
+  --query "Subnets[0:2].SubnetId" \
+  --output text --region us-east-1 | tr '\t' ',')
+
+echo "VPC: $VPC_ID"
+echo "Subnets: $SUBNET_IDS"
+
+aws ssm put-parameter --name "/agenticops/vpc/id" --value "$VPC_ID" --type String --region us-east-1 --overwrite
+aws ssm put-parameter --name "/agenticops/vpc/subnet-ids" --value "$SUBNET_IDS" --type String --region us-east-1 --overwrite
+```
+
+**Lesson:**
+`aws ec2 describe-vpcs` returning `None` for the default VPC means it was deleted. This is common in accounts that have had cleanup scripts run. `create-default-vpc` recreates it with the standard `172.31.0.0/16` CIDR and auto-creates subnets in each AZ.
+
+---
+
+### Issue 32: ECS Service Stuck — `CannotPullContainerError` Due to ECS Service Linked Role
+
+**Symptom:**
+```
+An error occurred (InvalidParameterException) when calling the CreateCluster
+operation: Unable to assume the service linked role. Please verify that the
+ECS service linked role exists.
+```
+
+**Root Cause:**
+The ECS service-linked role `AWSServiceRoleForECS` appeared to be missing. However, it actually existed — the error was misleading.
+
+**Fix:**
+Skip the `--capacity-providers` flag when creating the cluster:
+
+```bash
+# Wrong — triggers service linked role check
+aws ecs create-cluster \
+  --cluster-name agenticops-cluster \
+  --capacity-providers FARGATE \
+  --default-capacity-provider-strategy capacityProvider=FARGATE,weight=1
+
+# Correct — Fargate support is built-in without explicit capacity providers
+aws ecs create-cluster \
+  --cluster-name agenticops-cluster \
+  --region us-east-1
+```
+
+If the role genuinely doesn't exist:
+```bash
+aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com
+```
+
+**Lesson:**
+ECS clusters support Fargate by default without specifying `--capacity-providers`. The explicit capacity provider flag triggers additional validation that can fail even when the cluster would work fine without it.
+
+---
+
+## Research Agent Phase D — Bedrock Wiring Issues
+
+---
+
+### Issue 33: Supervisor Agent Cannot Have Action Groups
+
+**Symptom:**
+```
+ValidationException: Failed to create OpenAPI 3 model from the JSON/YAML object
+that you provided for action: web-research
+```
+(Same error for every schema variation tried — minimal schema, GET vs POST, no requestBody, etc.)
+
+**Root Cause:**
+`SUPERVISOR` mode agents in Bedrock cannot have Action Groups. This is a fundamental architectural constraint — Supervisor agents can only delegate to collaborators, they cannot call tools directly. The `ValidationException` error message was misleading and did not indicate the real cause.
+
+**How We Discovered This:**
+- Same schema (`get-alarms-schema.json`) that worked on IT Ops agent failed on Supervisor
+- Tried 8+ different schema variations — all failed with identical error
+- Confirmed by checking: Supervisor had `SUPERVISOR` collaboration mode set
+
+**Fix:**
+Create a dedicated **Research Bedrock Agent** (separate from Supervisor) and attach the action group to it. Register it as a collaborator on the Supervisor.
+
+```bash
+# Create dedicated Research Bedrock Agent
+RESEARCH_AGENT_ID=$(aws bedrock-agent create-agent \
+  --agent-name "agenticops-research-agent-bedrock" \
+  --agent-resource-role-arn "arn:aws:iam::011528270076:role/agenticops-bedrock-agent-role" \
+  --foundation-model "us.anthropic.claude-sonnet-4-6" \
+  --instruction "You are the AgenticOps Research Agent. Your job is to find current information from the web about AWS services, Bedrock features, and operational topics. Use the web-research action to search for information. Always cite your sources. Be concise and focus on actionable information." \
+  --region us-east-1 \
+  --query "agent.agentId" --output text)
+
+# Add Lambda permission for this new agent
+aws lambda add-permission \
+  --function-name agenticops-research-agent-action \
+  --statement-id bedrock-research-agent-invoke \
+  --action lambda:InvokeFunction \
+  --principal bedrock.amazonaws.com \
+  --source-arn "arn:aws:bedrock:us-east-1:011528270076:agent/$RESEARCH_AGENT_ID" \
+  --region us-east-1
+
+# Create action group on Research Agent (not Supervisor)
+aws bedrock-agent create-agent-action-group \
+  --agent-id "$RESEARCH_AGENT_ID" \
+  --agent-version "DRAFT" \
+  --action-group-name "web-research" \
+  --description "Research a topic on the web" \
+  --action-group-executor '{"lambda": "arn:aws:lambda:us-east-1:011528270076:function:agenticops-research-agent-action"}' \
+  --api-schema '{"s3": {"s3BucketName": "agenticops-artifacts", "s3ObjectKey": "schemas/research-agent/schema.json"}}' \
+  --region us-east-1
+```
+
+**Lesson:**
+SUPERVISOR mode agents = routing only, no Action Groups. Specialist agents = Action Groups only. This is a fundamental Bedrock design constraint.
+
+---
+
+### Issue 34: OpenAPI Schema Validation Failure — IAM ImplicitDeny on S3
+
+**Symptom:**
+```
+ValidationException: Failed to create OpenAPI 3 model from the JSON/YAML object
+that you provided for action: web-research
+```
+(Same error even with valid schema, on the Research Agent — not Supervisor)
+
+**Root Cause:**
+`agenticops-bedrock-agent-role` had `implicitDeny` on `s3:GetObject` for `agenticops-artifacts` bucket. The production hardening phase scoped S3 access to `agenticops-knowledge-base-docs` only. When Bedrock tried to read the schema file from S3 to validate it, the read failed silently.
+
+**Diagnosis:**
+```bash
+# This is the key diagnostic step
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::011528270076:role/agenticops-bedrock-agent-role \
+  --action-names s3:GetObject \
+  --resource-arns arn:aws:s3:::agenticops-artifacts/schemas/research-agent/schema.json \
+  --query "EvaluationResults[0].EvalDecision"
+# Returned: "implicitDeny"  <-- this was the actual issue all along
+```
+
+**Fix:**
+```bash
+aws iam put-role-policy \
+  --role-name agenticops-bedrock-agent-role \
+  --policy-name agenticops-agent-s3-artifacts \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::agenticops-artifacts",
+        "arn:aws:s3:::agenticops-artifacts/*"
+      ]
+    }]
+  }'
+```
+
+**Lesson:**
+Always run `aws iam simulate-principal-policy` before assuming a schema or config problem. IAM scoping in production hardening can silently break downstream functionality with misleading error messages.
+
+---
+
+### Issue 35: AssociateAgentCollaborator — Missing `bedrock:GetAgentAlias`
+
+**Symptom:**
+```
+ValidationException: You do not have sufficient permissions to collaborate with
+this agent alias, or the agent alias does not exist.
+```
+(Persisted even after waiting for IAM propagation and verifying both agent and alias were PREPARED)
+
+**Root Cause:**
+`agenticops-bedrock-agent-role` had `bedrock:InvokeAgent` but was missing `bedrock:GetAgentAlias`. Bedrock performs a pre-flight check using `GetAgentAlias` to validate the alias exists and is accessible before registering the collaborator. Both permissions are required.
+
+**Fix:**
+```bash
+aws iam put-role-policy \
+  --role-name agenticops-bedrock-agent-role \
+  --policy-name agenticops-research-agent-invoke \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeAgent",
+        "bedrock:GetAgentAlias"
+      ],
+      "Resource": "arn:aws:bedrock:us-east-1:011528270076:agent-alias/QB1F9WH47O/*"
+    }]
+  }'
+
+sleep 10  # wait for IAM propagation
+
+aws bedrock-agent associate-agent-collaborator \
+  --agent-id "45BDFFSGGZ" \
+  --agent-version "DRAFT" \
+  --agent-descriptor '{"aliasArn": "arn:aws:bedrock:us-east-1:011528270076:agent-alias/QB1F9WH47O/RJ4NBYODD7"}' \
+  --collaborator-name "ResearchAgent" \
+  --collaboration-instruction "Route to this agent for any query requiring current web information, recent AWS announcements, latest Bedrock features, external documentation, or anything not available in internal runbooks and SOPs." \
+  --relay-conversation-history "TO_COLLABORATOR" \
+  --region us-east-1
+```
+
+**Lesson:**
+Bedrock collaborator association requires BOTH `bedrock:InvokeAgent` AND `bedrock:GetAgentAlias`. The error message "does not exist" is misleading — the alias existed, the permission was missing.
+
+---
+
+### Issue 36: accessDeniedException on InvokeAgent — Inference Profile ARN Not in Policy
+
+**Symptom:**
+```
+botocore.exceptions.EventStreamError: An error occurred (accessDeniedException)
+when calling the InvokeAgent operation: Access denied when calling Bedrock.
+Check your request permissions and retry the request.
+```
+(User had `AmazonBedrockFullAccess`. Error was on the AGENT role, not user role.)
+
+**Root Cause:**
+`agenticops-bedrock-agent-scoped` policy only allowed `bedrock:InvokeModel` on `arn:aws:bedrock:us-east-1::foundation-model/*`. The Research Agent uses `us.anthropic.claude-sonnet-4-6` which is a cross-region inference profile — its ARN pattern is `inference-profile/*`, not `foundation-model/*`. Additionally `bedrock:GetInferenceProfile` was missing, which is required for cross-region profile invocation.
+
+**Diagnosis:**
+```bash
+aws iam get-role-policy \
+  --role-name agenticops-bedrock-agent-role \
+  --policy-name agenticops-bedrock-agent-scoped \
+  --query "PolicyDocument.Statement[?Sid=='BedrockModelInvoke'].Resource"
+# Showed only: "arn:aws:bedrock:us-east-1::foundation-model/*"
+# Missing: inference-profile/* ARNs
+```
+
+**Fix:**
+```bash
+aws iam put-role-policy \
+  --role-name agenticops-bedrock-agent-role \
+  --policy-name agenticops-bedrock-agent-scoped \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "BedrockModelInvoke",
+        "Effect": "Allow",
+        "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+        "Resource": [
+          "arn:aws:bedrock:us-east-1::foundation-model/*",
+          "arn:aws:bedrock:us-east-1:011528270076:inference-profile/*",
+          "arn:aws:bedrock:*::foundation-model/*"
+        ]
+      },
+      {
+        "Sid": "BedrockInferenceProfile",
+        "Effect": "Allow",
+        "Action": ["bedrock:GetInferenceProfile", "bedrock:ListInferenceProfiles"],
+        "Resource": "*"
+      }
+    ]
+  }'
+```
+
+**Lesson:**
+`foundation-model/*` and `inference-profile/*` are different resource types in IAM. Cross-region inference profiles (`us.*` prefix) require BOTH ARN patterns. `bedrock:GetInferenceProfile` is also required but not prominently documented. Use IAM policy simulator after any scoping change.
+
+---
+
+### Issue 37: Supervisor Alias Pointing to Old Version — Research Agent Not Invoked
+
+**Symptom:**
+Research queries returned "Sorry, the model cannot answer this question." No Lambda logs for `agenticops-research-agent-action` existed (Lambda never invoked).
+
+**Root Cause:**
+Supervisor alias `U4A49NOUEK` was routing to version `1` — created before the Research Agent collaborator was added. The DRAFT version had the Research Agent registered, but the alias pointed to the immutable version 1 snapshot which cannot include new collaborators.
+
+**Diagnosis:**
+```bash
+aws bedrock-agent get-agent-alias \
+  --agent-id "45BDFFSGGZ" --agent-alias-id "U4A49NOUEK" \
+  --region us-east-1 \
+  --query "agentAlias.routingConfiguration"
+# Returned: [{"agentVersion": "1"}]  <-- version 1 has no Research Agent
+```
+
+**Fix:**
+Create version 2 from current DRAFT via console (boto3/CLI `create_agent_version` not available in this CLI version):
+
+```
+Bedrock Console
+→ Agents → agenticops-supervisor
+→ Aliases → dev → Edit
+→ Select "Create a new version and associate it to this alias"
+→ Save
+```
+
+Verify via CLI:
+```bash
+aws bedrock-agent get-agent-alias \
+  --agent-id "45BDFFSGGZ" --agent-alias-id "U4A49NOUEK" \
+  --region us-east-1 \
+  --query "agentAlias.routingConfiguration"
+# Should now show: [{"agentVersion": "2"}]
+```
+
+**Lesson:**
+After adding a collaborator to a Supervisor, always create a new agent version and update the alias routing. Agent versions are immutable snapshots — the old version cannot retroactively include new collaborators. When an agent alias points to an old version, new capabilities are completely invisible to callers.
 
 ---
 
@@ -869,29 +1331,19 @@ aws: [ERROR]: the following arguments are required: --name, --value
 ```
 
 **Root Cause:**
-Pasting multi-line commands with inline comments (`#`) or line continuations (`\`) into zsh terminal. Zsh treats each line as a separate command when pasted.
+Pasting multi-line commands with inline comments (`#`) or line continuations (`\`) into zsh. Zsh treats each line as a separate command when pasted from clipboard.
 
-**Fix:**
-Run commands as single lines without comments:
-
+**Fix — Run as single line:**
 ```bash
-# Wrong — paste as multi-line with comments
-aws ssm put-parameter \
-  --name "/agenticops/bedrock/kb-id" \   # this breaks zsh
-  --value "2DPJKUACLU" \
-  --type String \
-  --region us-east-1
-
-# Correct — single line, no comments
-aws ssm put-parameter --name "/agenticops/bedrock/kb-id" --value "2DPJKUACLU" --type String --region us-east-1
+aws ssm put-parameter --name "/agenticops/bedrock/kb-id" --value "NLHMUXZM4R" --type String --region us-east-1
 ```
 
-Or save to a shell script file and execute:
+**Fix — Save to script file:**
 ```bash
 cat > /tmp/cmd.sh << 'EOF'
 aws ssm put-parameter \
   --name "/agenticops/bedrock/kb-id" \
-  --value "2DPJKUACLU" \
+  --value "NLHMUXZM4R" \
   --type String \
   --region us-east-1
 EOF
@@ -907,16 +1359,9 @@ bash /tmp/cmd.sh
 fatal: not a git repository (or any of the parent directories): .git
 ```
 
-**Root Cause:**
-Running git commands from a different directory (`aws-llmops-project`) instead of the correct repo (`AWS-AgenticOps-Project`).
-
 **Fix:**
 ```bash
-# Always verify before committing
-git rev-parse --show-toplevel   # shows repo root
-pwd                              # shows current directory
-
-# Navigate to correct repo
+git rev-parse --show-toplevel   # verify repo root
 cd ~/Documents/MyProjects/AWS-AgenticOps-Project
 git status
 ```
@@ -931,20 +1376,15 @@ ValidationException: Value '<DS_ID>' at 'dataSourceId' failed to satisfy
 constraint: Member must satisfy regular expression pattern: [0-9a-zA-Z]{10}
 ```
 
-**Root Cause:**
-Literally pasting `<DS_ID>` or `<YOUR_KB_ID>` placeholder text into CLI commands instead of replacing with actual values.
-
 **Fix:**
-Always replace angle-bracket placeholders before running:
-
 ```bash
-# Before running, confirm variable is set
-echo $DS_ID   # should show actual ID, not empty
+# Verify variable is set before using
+echo $DS_ID   # must show actual ID, not empty
 
 # Or hardcode the real value
 aws bedrock-agent start-ingestion-job \
-  --knowledge-base-id "NLHMUXZM4R" \      # real ID
-  --data-source-id "B3QL9TOORM" \          # real ID
+  --knowledge-base-id "NLHMUXZM4R" \
+  --data-source-id "B3QL9TOORM" \
   --region us-east-1
 ```
 
@@ -952,9 +1392,7 @@ aws bedrock-agent start-ingestion-job \
 
 ## Quick Diagnostic Commands
 
-Use these when something breaks and you need to quickly find the issue.
-
-### Check Agent Status
+### Check All Agent Statuses
 
 ```bash
 aws bedrock-agent list-agents --region us-east-1 \
@@ -962,39 +1400,74 @@ aws bedrock-agent list-agents --region us-east-1 \
   --output table
 ```
 
-### Check KB Ingestion Status
+### Check Supervisor Alias Version
 
 ```bash
-aws bedrock-agent list-ingestion-jobs \
-  --knowledge-base-id NLHMUXZM4R \
-  --data-source-id B3QL9TOORM \
-  --region us-east-1 \
-  --query "ingestionJobSummaries[].{ID:ingestionJobId, Status:status, Started:startedAt}" \
-  --output table
+aws bedrock-agent get-agent-alias \
+  --agent-id "45BDFFSGGZ" --agent-alias-id "U4A49NOUEK" \
+  --region us-east-1 --query "agentAlias.routingConfiguration"
 ```
 
-### Check Lambda Errors (last 10 minutes)
+### Check Supervisor Collaborators
+
+```bash
+aws bedrock-agent list-agent-collaborators \
+  --agent-id "45BDFFSGGZ" --agent-version "DRAFT" \
+  --region us-east-1 \
+  --query "agentCollaboratorSummaries[].{Name:collaboratorName, ID:collaboratorId}"
+```
+
+### Check Lambda Never Invoked
+
+```bash
+aws logs describe-log-groups \
+  --log-group-name-prefix "/aws/lambda/agenticops" \
+  --region us-east-1 \
+  --query "logGroups[].logGroupName" --output table
+# If agenticops-research-agent-action missing -> Lambda never invoked -> issue is upstream
+```
+
+### Check ECS Service Health
+
+```bash
+aws ecs describe-services --cluster agenticops-cluster \
+  --services agenticops-research-agent --region us-east-1 \
+  --query "services[0].{Running:runningCount, Pending:pendingCount, Event:events[0].message}"
+```
+
+### Check ECS Logs
+
+```bash
+aws logs tail /ecs/agenticops-research-agent --since 10m --region us-east-1
+```
+
+### Check IAM Permission Before Testing
+
+```bash
+aws iam simulate-principal-policy \
+  --policy-source-arn arn:aws:iam::011528270076:role/agenticops-bedrock-agent-role \
+  --action-names s3:GetObject \
+  --resource-arns arn:aws:s3:::agenticops-artifacts/schemas/research-agent/schema.json \
+  --query "EvaluationResults[0].EvalDecision"
+```
+
+### Check Lambda Errors
 
 ```bash
 aws logs tail /aws/lambda/agenticops-async-consumer --since 10m --region us-east-1
 ```
 
-### Check SQS Queue Depth
+### Check All DLQ Depths
 
 ```bash
-aws sqs get-queue-attributes \
-  --queue-url https://sqs.us-east-1.amazonaws.com/011528270076/agenticops-async-tasks \
-  --attribute-names ApproximateNumberOfMessages,ApproximateNumberOfMessagesNotVisible \
-  --region us-east-1
-```
-
-### Check DLQ Depth
-
-```bash
-aws sqs get-queue-attributes \
-  --queue-url https://sqs.us-east-1.amazonaws.com/011528270076/agenticops-async-tasks-dlq \
-  --attribute-names ApproximateNumberOfMessagesVisible \
-  --region us-east-1
+for queue in agenticops-async-tasks-dlq agenticops-lambda-dlq; do
+  COUNT=$(aws sqs get-queue-attributes \
+    --queue-url https://sqs.us-east-1.amazonaws.com/011528270076/$queue \
+    --attribute-names ApproximateNumberOfMessagesVisible \
+    --region us-east-1 \
+    --query "Attributes.ApproximateNumberOfMessagesVisible" --output text)
+  echo "$queue: $COUNT messages"
+done
 ```
 
 ### Check Step Functions Execution
@@ -1003,47 +1476,33 @@ aws sqs get-queue-attributes \
 aws stepfunctions list-executions \
   --state-machine-arn arn:aws:states:us-east-1:011528270076:stateMachine:agenticops-workflow \
   --region us-east-1 \
-  --query "executions[0:5].{Name:name, Status:status, Start:startDate}" \
-  --output table
+  --query "executions[0:5].{Name:name, Status:status, Start:startDate}" --output table
 ```
 
-### Check IAM Permissions (simulate)
+### Test API Gateway CORS
 
 ```bash
-aws iam simulate-principal-policy \
-  --policy-source-arn arn:aws:iam::011528270076:role/agenticops-lambda-execution-role \
-  --action-names states:ListStateMachines \
-  --resource-arns "*"
+curl -X OPTIONS https://ipm0lawtc7.execute-api.us-east-1.amazonaws.com/dev/invoke \
+  -H "Origin: http://localhost:8080" -H "Access-Control-Request-Method: POST" \
+  -v 2>&1 | grep "access-control"
+# Should show: access-control-allow-origin: *
+```
+
+### Verify All SSM Parameters
+
+```bash
+aws ssm get-parameters-by-path --path "/agenticops" --recursive \
+  --region us-east-1 --query "Parameters[].{Name:Name, Value:Value}" --output table
 ```
 
 ### Check CloudTrail for Failed API Calls
 
 ```bash
 aws cloudtrail lookup-events \
-  --lookup-attributes AttributeKey=EventName,AttributeValue=CreateKnowledgeBase \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=CreateAgentActionGroup \
   --region us-east-1 \
   --query 'Events[0].CloudTrailEvent' \
   --output text | python3 -m json.tool | grep -A3 '"errorCode"'
-```
-
-### Test API Gateway CORS Preflight
-
-```bash
-curl -X OPTIONS https://ipm0lawtc7.execute-api.us-east-1.amazonaws.com/dev/invoke \
-  -H "Origin: http://localhost:8080" \
-  -H "Access-Control-Request-Method: POST" \
-  -v 2>&1 | grep "access-control"
-```
-
-### Verify All SSM Parameters
-
-```bash
-aws ssm get-parameters-by-path \
-  --path "/agenticops" \
-  --recursive \
-  --region us-east-1 \
-  --query "Parameters[].{Name:Name, Value:Value}" \
-  --output table
 ```
 
 ---
@@ -1052,19 +1511,23 @@ aws ssm get-parameters-by-path \
 
 | Category | Issues | Most Common Root Cause |
 |---|---|---|
-| IAM Permissions | 5 | Missing cross-service permissions not covered by managed policies |
+| IAM Permissions | 8 | Missing cross-service perms, inference-profile ARN, GetAgentAlias |
 | Bedrock / S3 Vectors | 3 | New service integration bugs, format mismatches |
 | Step Functions | 4 | JSONPath with Parallel state output, unreachable states |
 | API Gateway / CORS | 3 | 29s timeout, CORS 3-layer config, file:// vs http:// |
+| ECS / Docker / ECR | 5 | Shell variable typos, buildx DNS, uvicorn permissions, missing VPC |
+| Bedrock Multi-Agent | 5 | Supervisor cannot have action groups, alias version, collaborator perms |
 | DynamoDB | 1 | Reserved keyword `result` |
 | CLI / Shell | 3 | Zsh pasting, wrong directory, placeholder values |
 | Knowledge Base | 4 | Metadata format, S3 delete flags, ingestion failures |
 
-**Top 3 lessons from this build:**
-1. **Always check CloudTrail** when AWS resource creation fails silently — the console masks real errors
-2. **IAM permissions are additive** — managed policies don't grant cross-service access automatically
-3. **S3 Vectors is too new** for production use with Bedrock KB — use OpenSearch Serverless
+**Top 5 lessons from this entire build:**
+1. **Use IAM policy simulator first** — `simulate-principal-policy` would have caught Issues 34, 35, 36 immediately
+2. **SUPERVISOR agents cannot have Action Groups** — Bedrock's most confusing architectural constraint
+3. **Hardcode ECR URIs** — shell variables for container image references cause silent failures
+4. **foundation-model/* does NOT cover inference-profile/*** — add both when scoping Bedrock IAM
+5. **Always check CloudTrail** when AWS resource creation fails silently — the console masks real errors
 
 ---
 
-*Last Updated: May 2026 | AgenticOps Platform v1.0*
+*Last Updated: May 2026 | AgenticOps Platform v1.0 | 37 issues documented*
