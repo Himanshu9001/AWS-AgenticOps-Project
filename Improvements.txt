@@ -1,0 +1,52 @@
+Round 1 — Security (P0)
+    1. Publish guardrail version + pin agents
+    2. Least-privilege IAM roles
+    3. API Gateway usage plan + rate limiting
+    4. WAF on API Gateway
+
+Round 2 — Reliability (P1)
+    5. Pin agent aliases to numbered versions
+    6. Lambda DLQ
+    7. Bedrock retry config on all Lambdas
+    8. Lambda concurrency limits
+
+Round 3 — Observability (P1)
+    9. SNS topic + wire all alarms
+    10. Cost budget alarm
+    11. Structured JSON logging on key Lambdas
+
+Round 4 — Operations (P2)
+    12. GitHub Actions CI/CD for Lambda deploys
+    13. Environment separation via SSM paths
+
+⬜ Cognito auth on API Gateway
+    Fix: Replace API key with Cognito User Pool authorizer
+    Why: API keys are not user-level auth
+
+⬜ Lambda concurrency limits
+    Fix: Request account limit increase from AWS Support
+    Why: Account had insufficient unreserved concurrency
+
+⬜ CloudFront + S3 hosting for chat UI
+    Fix: aws s3 sync + CloudFront distribution
+    Why: Currently serving via python3 -m http.server locally
+
+⬜ Dev/prod environment separation
+    Fix: Separate SSM paths /agenticops/dev/ vs /agenticops/prod/
+    Why: Everything is in one environment right now
+
+⬜ Agent alias version pinning
+    Fix: create-agent-version CLI not available yet in this CLI version
+    Why: Aliases point to DRAFT routing config
+
+⬜ Bedrock agent trace logging
+    Fix: Enable CloudWatch logging on agents via console
+    Why: Agent reasoning steps not captured in logs
+
+⬜ metadata.json on KB documents
+    Fix: Re-add after S3 Vectors issue resolved with flat format
+    Why: Metadata filtering currently not working on KB retrieval
+
+⬜ TROUBLESHOOTING.md and infra.md pushed to repo
+    Fix: cp and git push
+    Why: May not have been committed yet
