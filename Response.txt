@@ -56,3 +56,83 @@ Here is the standard procedure for handling critically high CPU utilization on a
 ---
 If you have a **specific instance ID** that is currently experiencing high CPU, I can check its live CloudWatch alarms, inspect its current metrics, and walk you through targeted remediation steps!
 --- Done ---
+
+
+########## Test Pipeline agent ##########
+python3 << 'EOF'
+import boto3
+
+client = boto3.client("bedrock-agent-runtime", region_name="us-east-1")
+
+response = client.invoke_agent(
+    agentId="YGZ3D0T7HC",
+    agentAliasId="VDLDYWNPDK",
+    sessionId="test-pipeline-001",
+    inputText="What is the SOP for the async task pipeline and what should I check if tasks are stuck in queued state?"
+)
+
+for event in response["completion"]:
+    if "chunk" in event:
+        print(event["chunk"]["bytes"].decode("utf-8"), end="")
+
+print("\n--- Done ---")
+EOF
+
+Response:
+## Async Task Pipeline — Overview
+The agenticops-async-task-pipeline handles long-running agent tasks (>30s). The flow is:
+
+API Request → api-handler Lambda → SQS: agenticops-async-tasks
+    → async-consumer Lambda → Bedrock Agent → DynamoDB: agenticops-task-results
+    → Client polls /status/{taskId}
+
+### Task Lifecycle States
+| State | Location | Meaning |
+|---|---|---|
+| queued | SQS | Received, not yet picked up |
+| processing | DynamoDB | Consumer Lambda is running |
+| completed | DynamoDB | Result available |
+| failed | DynamoDB | Failed after retries |
+| expired | — | TTL elapsed, result purged |
+## Tasks Stuck in queued State — What to Check
+**Root Cause:** The consumer Lambda is not picking up messages — typically due to Lambda errors or hitting the concurrency limit.
+### Step 1 — Check SQS Queue Depth
+Run this to see how many messages are waiting vs. in-flight:
+bash
+aws sqs get-queue-attributes \
+  --queue-url https://sqs.us-east-1.amazonaws.com/ACCOUNT/agenticops-async-tasks \
+  --attribute-names ApproximateNumberOfMessages,ApproximateNumberOfMessagesNotVisible
+
+### Step 2 — Check Lambda Concurrency
+bash
+aws lambda get-function-concurrency \
+  --function-name agenticops-async-consumer
+
+### Step 3 — Check Lambda Errors
+Go to **CloudWatch → Lambda/Errors** for agenticops-async-consumer. The alarm threshold is **>5% error rate**.
+### Fix
+- **Concurrency limit hit?** → Increase the reserved concurrency for agenticops-async-consumer.
+- **Lambda errors?** → Review CloudWatch Logs for agenticops-async-consumer and follow runbook-lambda-errors.md.
+## Important SQS Configuration to Verify
+A common misconfiguration that can cause tasks to appear "stuck" or trigger **duplicate executions** is a mismatched visibility timeout. The SQS visibility timeout **must be greater than the Lambda timeout**:
+| Parameter | Expected Value |
+|---|---|
+| Visibility timeout | **330 seconds** (Lambda timeout 300s + 30s buffer) |
+| Message retention | 4 hours |
+| Max receive count | 3 (then routes to DLQ) |
+| DLQ | agenticops-async-tasks-dlq |
+If the visibility timeout is too short, messages re-appear in the queue before Lambda finishes, causing both duplicates and the appearance of tasks stuck in queued. Fix with:
+bash
+aws sqs set-queue-attributes \
+  --queue-url https://sqs.us-east-1.amazonaws.com/ACCOUNT/agenticops-async-tasks \
+  --attributes VisibilityTimeout=330
+
+## SLA Targets to Keep in Mind
+| Metric | Target |
+|---|---|
+| Task pickup (queued → processing) | **< 30 seconds** |
+| Simple task completion | < 2 minutes |
+| Complex multi-tool task | < 10 minutes |
+| DLQ depth | **0** (alert on any messages) |
+**Related Documents to consult:** runbook-lambda-errors.md, postmortem-lambda-cascade-mar2025.md
+--- Done ---
