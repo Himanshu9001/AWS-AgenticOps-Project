@@ -136,3 +136,122 @@ aws sqs set-queue-attributes \
 | DLQ depth | **0** (alert on any messages) |
 **Related Documents to consult:** runbook-lambda-errors.md, postmortem-lambda-cascade-mar2025.md
 --- Done ---
+
+
+###### Asyn Operation #####
+python3 << 'EOF'
+import boto3
+import json
+import time
+
+lambda_client = boto3.client("lambda", region_name="us-east-1")
+dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
+table = dynamodb.Table("agenticops-task-results")
+
+# Submit task
+response = lambda_client.invoke(
+    FunctionName="agenticops-api-handler",
+    InvocationType="RequestResponse",
+    Payload=json.dumps({
+        "body": json.dumps({
+            "task": "What should I do when RDS connections are exhausted?",
+            "async": True,
+            "sessionId": "async-test-002"
+        })
+    })
+)
+
+result = json.loads(response["Payload"].read())
+body = json.loads(result["body"])
+task_id = body["taskId"]
+print(f"TaskId: {task_id} — Status: {body['status']}")
+
+# Poll for result
+print("\nPolling...")
+for i in range(36):
+    item = table.get_item(Key={"taskId": task_id}).get("Item", {})
+    status = item.get("status", "not found")
+    print(f"[{i*5}s] Status: {status}")
+
+    if status == "completed":
+        print("\n--- Result ---")
+        print(item.get("result", ""))
+        break
+    elif status == "failed":
+        print(f"Failed: {item.get('errorMessage')}")
+        break
+
+    time.sleep(5)
+EOF
+
+
+
+Response:
+TaskId: task-253592d0e913 — Status: queued
+Polling...
+[0s] Status: queued
+[5s] Status: processing
+[10s] Status: processing
+[15s] Status: processing
+[20s] Status: processing
+[25s] Status: processing
+[30s] Status: processing
+[35s] Status: processing
+[40s] Status: processing
+[45s] Status: processing
+[50s] Status: completed
+--- Result ---
+Here's a comprehensive guide on handling RDS connection exhaustion:
+---
+## 🚨 RDS Connection Exhaustion — What To Do
+### Overview
+RDS connection exhaustion occurs when the `DatabaseConnections` metric hits the `max_connections` limit, causing new connections to fail with errors like `Too many connections`. This is a **P0/Critical** incident.
+**Alert Thresholds:**
+| Threshold | Action |
+|---|---|
+| > 60% of `max_connections` | ⚠️ Warning — monitor closely |
+| > 85% | 🔴 Critical — act immediately |
+| > 95% | 💀 P0 Emergency |
+**Max Connections by Instance Class:**
+| Instance Class | max_connections |
+|---|---|
+| db.t3.micro | 66 |
+| db.t3.medium | 312 |
+| db.r6g.large | 1,365 |
+| db.r6g.xlarge | 2,730 |
+| db.r6g.2xlarge | 5,460 |
+---
+## 🔍 Step-by-Step Diagnosis
+**Step 1 — Check current connection count via CloudWatch:**
+```bash
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/RDS \
+  --metric-name DatabaseConnections \
+  --dimensions Name=DBInstanceIdentifier,Value=<your-db-id> \
+  --start-time $(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
+  --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  --period 60 \
+  --statistics Average,Maximum
+```
+**Step 2 — Inspect active connections on the DB:**
+```sql
+-- Count connections by state
+SELECT state, count(*) FROM pg_stat_activity GROUP BY state;
+-- Connections by application, user, and client
+SELECT usename, application_name, client_addr, state, count(*)
+FROM pg_stat_activity
+GROUP BY usename, application_name, client_addr, state
+ORDER BY count DESC;
+-- Long-running queries (> 5 minutes)
+SELECT pid, now() - pg_stat_activity.query_start AS duration, query, state
+FROM pg_stat_activity
+WHERE (now() - pg_stat_activity.query_start) > interval '5 minutes'
+AND state != 'idle';
+```
+**Step 3 — Identify the connection leaker:**
+```sql
+SELECT client_addr, count(*) as connection_count
+FROM pg_stat_activity
+GROUP BY client_addr
+
+
