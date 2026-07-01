@@ -1,0 +1,12 @@
+aws bedrock-agent-runtime retrieve-and-generate --input '{"text": "what are the steps to diagnose high CPU on EC2?"}' --retrieve-and-generate-configuration '{"type": "KNOWLEDGE_BASE", "knowledgeBaseConfiguration": {"knowledgeBaseId": "NLHMUXZM4R", "modelArn": "arn:aws:bedrock:us-east-1:011528270076:inference-profile/us.anthropic.claude-sonnet-4-6"}}' --region us-east-1 --query "{Response:output.text, Citations:citations[].retrievedReferences[].location}"
+{
+    "Response": "Here are the steps to diagnose high CPU utilization on an EC2 instance:\n\n**Step 1: Identify the Affected Resource**\n- Query CloudWatch for any active high CPU alarms to find the affected instance ID\n- Use the AWS CLI to describe the EC2 instance and retrieve its details (instance type, state, tags, etc.)\n\n**Step 2: Check CloudWatch Metrics**\n- Pull CPU utilization metrics for the last 30 minutes using CloudWatch, looking at both average and maximum statistics with a 60-second period\n\n**Step 3: SSH and Investigate the Process**\n- SSH into the instance\n- Check top processes sorted by CPU usage (e.g., using top or ps aux)\n- Check the system load average using uptime\n- Investigate whether memory pressure is causing CPU issues by checking free memory and running vmstat\n\n**Step 4: Check Application Logs**\n- Review application logs for errors from the last 30 minutes\n- Check for Out-of-Memory (OOM) killer activity in dmesg, which can sometimes correlate with CPU spikes",
+    "Citations": [
+        {
+            "s3Location": {
+                "uri": "s3://agenticops-knowledge-base-docs/runbooks/runbook-high-cpu-alarm.md"
+            },
+            "type": "S3"
+        }
+    ]
+}
