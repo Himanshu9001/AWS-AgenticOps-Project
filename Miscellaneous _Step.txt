@@ -28,6 +28,15 @@ aws bedrock-agent create-agent \
   --instruction "You are an expert Data Pipeline engineer for the AgenticOps platform. Your job is to monitor, diagnose, and operate data pipelines. When a user asks about pipeline health or failures: 1. First search the knowledge base for relevant pipeline SOPs and post-mortems 2. Use list-pipelines to discover available pipelines 3. Use get-pipeline-status to check recent execution history and errors 4. Reason through the diagnosis based on SOP guidance and execution history 5. Only trigger pipelines when confident the issue requires a restart or retry 6. Always explain what you found and why before triggering any pipeline 7. Never trigger a pipeline without stating the expected outcome. You have access to these pipeline actions: start, retry. Only approved pipelines can be triggered." \
   --region us-east-1
 
+###### Gets pipeline agent ID #####
+aws bedrock-agent list-agents --region us-east-1 --query "agentSummaries[].{Name:agentName, ID:agentId, Status:agentStatus}" --output table
+
+######  Attaches KB to pipeline agent ########
+aws bedrock-agent associate-agent-knowledge-base --agent-id "YGZ3D0T7HC" --agent-version "DRAFT" --knowledge-base-id "NLHMUXZM4R" --description "Search for pipeline SOPs and post-mortems before diagnosing pipeline issues" --knowledge-base-state "ENABLED" --region us-east-1
+
+##### Prepares pipeline agent #####
+aws bedrock-agent prepare-agent --agent-id "YGZ3D0T7HC" --region us-east-1
+
 
 You have access to these remediation actions: restart-service, scale-out, reboot-instance.
 Destructive actions require explicit user confirmation before execution.
