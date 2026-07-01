@@ -10,3 +10,49 @@ aws bedrock-agent-runtime retrieve-and-generate --input '{"text": "what are the 
         }
     ]
 }
+
+
+##### Invokes ITOps Agent ######
+aws bedrock-agent-runtime invoke-agent \
+  --agent-id "UQINWRUDBC" \
+  --agent-alias-id "4414KWRLQ8" \
+  --session-id "test-session-001" \
+  --input-text "What should I do if CPU utilization is critically high on an EC2 instance?" \
+  --region us-east-1 \
+  output.txt
+
+Here is the standard procedure for handling critically high CPU utilization on an EC2 instance:
+---
+## 🔴 Severity Classification
+| CPU % | Duration | Severity | Response Time |
+|---|---|---|---|
+| 85–90% | 5 min | Medium | 30 minutes |
+| 90–95% | 5 min | High | 15 minutes |
+| **>95%** | **2 min** | **Critical** | **Immediate** |
+---
+## 🔍 Diagnosis Steps
+1. **Identify the Affected Resource** — Check CloudWatch alarms (alarm name pattern: AgenticOps-HighCPU-{instance-id}) and gather instance details (ID, type, state).
+2. **Check CloudWatch Metrics** — Pull CPU utilization stats for the last 30 minutes to understand trend and severity.
+3. **SSH & Investigate Processes** — Run top, ps aux --sort=-%cpu, and uptime to identify the runaway process. Also check memory/swap with free -m and vmstat.
+4. **Check Application Logs** — Look for errors in app logs and OOM killer activity in dmesg.
+---
+## 🛠️ Remediation Actions (in order of preference)
+| Action | When to Use | Risk |
+|---|---|---|
+| **Kill Runaway Process** | Specific process identified as the culprit | Possible data loss if it's mid-write — confirm with app owner |
+| **Restart Application Service** | App process is misbehaving but instance is responsive | Brief service interruption |
+| **Scale Out (Horizontal)** | Traffic spike, instance part of an ASG | Low risk, increases capacity |
+| **Scale Up (Vertical)** | Instance is chronically under-provisioned | ~2–5 min downtime, requires stop/start |
+---
+## ⚠️ Key Lessons from Past Incidents
+- **Never use cpu_count() without an explicit cap** in multiprocessing code — always set MAX_WORKERS via an environment variable.
+- **Burstable instances (t3.*)** are **not suitable for sustained CPU workloads** — use compute-optimized types (e.g., c6i, c7g) for batch jobs.
+- **Bulk jobs should go through SQS** to rate-limit processing and protect the instance.
+---
+## 📞 Escalation Path
+1. **L1 (On-call):** Kill runaway process or restart the application service.
+2. **L2 (Senior Engineer):** Scale out ASG or scale up instance type.
+3. **L3 (Architect):** If issue recurs within 24 hours → capacity planning review.
+---
+If you have a **specific instance ID** that is currently experiencing high CPU, I can check its live CloudWatch alarms, inspect its current metrics, and walk you through targeted remediation steps!
+--- Done ---
