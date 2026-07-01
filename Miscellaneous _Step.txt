@@ -42,9 +42,9 @@ What the response looks like
 When to call the action
 
 
-Create all 3 Action Groups. Run each separately:
+######## Create Action Groups #########
 Action Group 1 — Creates get-alarms Action Group
-bashaws bedrock-agent create-agent-action-group \
+aws bedrock-agent create-agent-action-group \
   --agent-id "UQINWRUDBC" \
   --agent-version "DRAFT" \
   --action-group-name "get-cloudwatch-alarms" \
@@ -53,7 +53,7 @@ bashaws bedrock-agent create-agent-action-group \
   --api-schema '{"s3": {"s3BucketName": "agenticops-artifacts", "s3ObjectKey": "schemas/itops/get-alarms-schema.json"}}' \
   --region us-east-1
 Action Group 2 — Creates describe-resource Action Group
-bashaws bedrock-agent create-agent-action-group \
+aws bedrock-agent create-agent-action-group \
   --agent-id "UQINWRUDBC" \
   --agent-version "DRAFT" \
   --action-group-name "describe-resource" \
@@ -62,7 +62,7 @@ bashaws bedrock-agent create-agent-action-group \
   --api-schema '{"s3": {"s3BucketName": "agenticops-artifacts", "s3ObjectKey": "schemas/itops/describe-resource-schema.json"}}' \
   --region us-east-1
 Action Group 3 — Creates trigger-remediation Action Group
-bashaws bedrock-agent create-agent-action-group \
+aws bedrock-agent create-agent-action-group \
   --agent-id "UQINWRUDBC" \
   --agent-version "DRAFT" \
   --action-group-name "trigger-remediation" \
