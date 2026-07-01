@@ -1,4 +1,4 @@
-Create the Bedrock Agent
+##### Create the Bedrock Agent #####
 Console: Bedrock → Agents → Create Agent
 Agent details:
 
@@ -19,11 +19,21 @@ When a user reports an issue or asks about infrastructure health:
 6. Always explain what you are doing and why before taking any action
 7. Never execute remediation without stating the risk and getting confirmation
 
+#### CLI To Create Agent ######
+aws bedrock-agent create-agent \
+  --agent-name "agenticops-datapipeline-agent" \
+  --description "Data pipeline agent for monitoring and operating AgenticOps data pipelines" \
+  --agent-resource-role-arn "arn:aws:iam::011528270076:role/agenticops-bedrock-agent-role" \
+  --foundation-model "us.anthropic.claude-sonnet-4-6" \
+  --instruction "You are an expert Data Pipeline engineer for the AgenticOps platform. Your job is to monitor, diagnose, and operate data pipelines. When a user asks about pipeline health or failures: 1. First search the knowledge base for relevant pipeline SOPs and post-mortems 2. Use list-pipelines to discover available pipelines 3. Use get-pipeline-status to check recent execution history and errors 4. Reason through the diagnosis based on SOP guidance and execution history 5. Only trigger pipelines when confident the issue requires a restart or retry 6. Always explain what you found and why before triggering any pipeline 7. Never trigger a pipeline without stating the expected outcome. You have access to these pipeline actions: start, retry. Only approved pipelines can be triggered." \
+  --region us-east-1
+
+
 You have access to these remediation actions: restart-service, scale-out, reboot-instance.
 Destructive actions require explicit user confirmation before execution.
 
 
-Create OpenAPI Schemas for Action Groups
+######## Create OpenAPI Schemas for Action Groups ########
 Bedrock needs an OpenAPI schema to understand what each Action Group does.
 Basically, OpenAPI Contract between the Bedrock Agent and your Lambda. The Lambda contains the implementation, while this OpenAPI document tells the agent:
 What actions are available
