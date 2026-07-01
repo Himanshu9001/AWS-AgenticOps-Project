@@ -167,3 +167,65 @@ AGENT_ID = "45BDFFSGGZ"
 ssm = boto3.client("ssm")
 QUEUE_URL = ssm.get_parameter(Name="/agenticops/sqs/async-tasks-url")["Parameter"]["Value"]
 AGENT_ID = ssm.get_parameter(Name="/agenticops/bedrock/supervisor-agent-id")["Parameter"]["Value"]
+
+
+######### Guardrails + Security ###########
+Guardrails sit in front of every Bedrock model call and filter both input and output. This is your safety and compliance layer.
+
+What We're Building
+User Input
+    ↓
+Guardrail (input filtering)
+    ├── Block competitor mentions
+    ├── Block PII (emails, phone, SSN)
+    ├── Content filters (hate, violence)
+    └── Word filters (custom blocked terms)
+    ↓
+Agent/Model processes request
+    ↓
+Guardrail (output filtering)
+    ├── PII redaction
+    ├── Grounding check (hallucination detection)
+    └── Content filters on response
+    ↓
+Safe Response
+
+Step 1 — Create Guardrail via Console
+Go to Bedrock → Guardrails → Create guardrail
+Guardrail details:
+
+Name: agenticops-guardrail
+Description: Safety and compliance guardrail for AgenticOps platform
+
+Content filters — set these thresholds:
+CategoryInputOutputHateMediumMediumInsultsLowLowSexualHighHighViolenceMediumMediumMisconductMediumMediumPrompt AttackHighNone
+Denied topics — add these:
+Topic 1:
+
+Name: competitor-discussion
+Definition: Requests to discuss, compare, or recommend competitor products or services
+Example phrases: use AWS competitor, switch to Azure, Google Cloud is better
+Type: DENY
+
+Topic 2:
+
+Name: destructive-actions
+Definition: Requests to delete, destroy, or permanently remove AWS resources without explicit confirmation
+Example phrases: delete all resources, destroy the infrastructure, remove everything
+Type: DENY
+
+Word filters — add:
+
+drop database
+rm -rf
+delete all
+format disk
+
+PII redaction — enable these:
+
+Email address → ANONYMIZE
+Phone number → ANONYMIZE
+AWS access key → BLOCK
+Password → BLOCK
+
+
