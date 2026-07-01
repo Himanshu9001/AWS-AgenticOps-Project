@@ -101,15 +101,15 @@ User / CloudWatch Alarm (EventBridge)
                       GET /status/{taskId}
 
 Step Functions Parallel Workflow (event-driven):
-EventBridge Alarm --> State Machine
-    |-- Branch 1: IT Ops Agent Lambda
-    |-- Branch 2: Pipeline Agent Lambda
-              |
-    ReshapeOutput (Pass state)
-              |
-    Aggregate Results Lambda
-              |
-    WorkflowComplete (Succeed)
+CloudWatch Alarm --> EventBridge Alarm --> State Machine
+                      |-- Branch 1: IT Ops Agent Lambda
+                      |-- Branch 2: Pipeline Agent Lambda
+                                      |
+                            ReshapeOutput (Pass state)
+                                      |
+                            Aggregate Results Lambda
+                                      |
+                            WorkflowComplete (Succeed)
 ```
 
 ---
