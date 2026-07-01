@@ -134,3 +134,36 @@ bashaws bedrock-agent prepare-agent --agent-id "45BDFFSGGZ" --region us-east-1
 
 ## Creates supervisor alias
 aws bedrock-agent create-agent-alias --agent-id "45BDFFSGGZ" --agent-alias-name "dev" --region us-east-1
+
+
+
+##### Create SQS Queues #####
+## Creates Dead Letter Queue
+aws sqs create-queue \
+  --queue-name agenticops-async-tasks-dlq \
+  --attributes '{"MessageRetentionPeriod": "86400"}' \
+  --region us-east-1
+
+## Creates main async task queue
+aws sqs create-queue \
+  --queue-name agenticops-async-tasks \
+  --attributes '{
+    "VisibilityTimeout": "330",
+    "MessageRetentionPeriod": "14400",
+    "RedrivePolicy": "{\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:011528270076:agenticops-async-tasks-dlq\",\"maxReceiveCount\":\"3\"}"
+  }' \
+  --region us-east-1
+
+## Lists SQS queues
+aws sqs list-queues \
+  --queue-name-prefix agenticops-async \
+  --region us-east-1
+
+
+Every Lambda function needs to know the queue URL, agent IDs, KB IDs, model IDs at runtime. You have two choices:
+QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/011528270076/agenticops-async-tasks"
+AGENT_ID = "45BDFFSGGZ"
+
+ssm = boto3.client("ssm")
+QUEUE_URL = ssm.get_parameter(Name="/agenticops/sqs/async-tasks-url")["Parameter"]["Value"]
+AGENT_ID = ssm.get_parameter(Name="/agenticops/bedrock/supervisor-agent-id")["Parameter"]["Value"]
