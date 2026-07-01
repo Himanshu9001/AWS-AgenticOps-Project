@@ -21,3 +21,42 @@ When a user reports an issue or asks about infrastructure health:
 
 You have access to these remediation actions: restart-service, scale-out, reboot-instance.
 Destructive actions require explicit user confirmation before execution.
+
+
+Create OpenAPI Schemas for Action Groups
+Bedrock needs an OpenAPI schema to understand what each Action Group does.
+Basically, OpenAPI Contract between the Bedrock Agent and your Lambda. The Lambda contains the implementation, while this OpenAPI document tells the agent:
+What actions are available
+What parameters it needs
+What the response looks like
+When to call the action
+
+
+Create all 3 Action Groups. Run each separately:
+Action Group 1 — Creates get-alarms Action Group
+bashaws bedrock-agent create-agent-action-group \
+  --agent-id "UQINWRUDBC" \
+  --agent-version "DRAFT" \
+  --action-group-name "get-cloudwatch-alarms" \
+  --description "Retrieves active CloudWatch alarms for AWS resources to diagnose infrastructure issues" \
+  --action-group-executor '{"lambda": "arn:aws:lambda:us-east-1:011528270076:function:agenticops-itops-get-alarms"}' \
+  --api-schema '{"s3": {"s3BucketName": "agenticops-artifacts", "s3ObjectKey": "schemas/itops/get-alarms-schema.json"}}' \
+  --region us-east-1
+Action Group 2 — Creates describe-resource Action Group
+bashaws bedrock-agent create-agent-action-group \
+  --agent-id "UQINWRUDBC" \
+  --agent-version "DRAFT" \
+  --action-group-name "describe-resource" \
+  --description "Describes current state and metrics of EC2 instances and RDS databases" \
+  --action-group-executor '{"lambda": "arn:aws:lambda:us-east-1:011528270076:function:agenticops-itops-describe-resource"}' \
+  --api-schema '{"s3": {"s3BucketName": "agenticops-artifacts", "s3ObjectKey": "schemas/itops/describe-resource-schema.json"}}' \
+  --region us-east-1
+Action Group 3 — Creates trigger-remediation Action Group
+bashaws bedrock-agent create-agent-action-group \
+  --agent-id "UQINWRUDBC" \
+  --agent-version "DRAFT" \
+  --action-group-name "trigger-remediation" \
+  --description "Executes approved remediation actions including restart-service, scale-out, and reboot-instance on AWS resources" \
+  --action-group-executor '{"lambda": "arn:aws:lambda:us-east-1:011528270076:function:agenticops-itops-trigger-remediation"}' \
+  --api-schema '{"s3": {"s3BucketName": "agenticops-artifacts", "s3ObjectKey": "schemas/itops/trigger-remediation-schema.json"}}' \
+  --region us-east-1
