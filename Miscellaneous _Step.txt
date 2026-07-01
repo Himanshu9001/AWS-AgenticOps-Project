@@ -79,3 +79,58 @@ aws bedrock-agent create-agent-action-group \
   --action-group-executor '{"lambda": "arn:aws:lambda:us-east-1:011528270076:function:agenticops-itops-trigger-remediation"}' \
   --api-schema '{"s3": {"s3BucketName": "agenticops-artifacts", "s3ObjectKey": "schemas/itops/trigger-remediation-schema.json"}}' \
   --region us-east-1
+
+
+########## Supervisor Orchestrator Agent ###########
+First enable multi-agent collaboration on both specialist agents so the supervisor can delegate to them.
+
+Step 1 — Disable Collaboration on Specialist Agent (Enable only when only specialist agent is also collaborating with some other agent)
+
+Reverts IT Ops agent collaboration to DISABLED
+aws bedrock-agent update-agent --agent-id "UQINWRUDBC" --agent-name "agenticops-itops-agent" --agent-resource-role-arn "arn:aws:iam::011528270076:role/agenticops-bedrock-agent-role" --foundation-model "us.anthropic.claude-sonnet-4-6" --instruction "You are an expert IT Operations engineer for the AgenticOps platform. Your job is to diagnose and remediate AWS infrastructure issues. When a user reports an issue or asks about infrastructure health: 1. First search the knowledge base for relevant runbooks or post-mortems 2. Use get-cloudwatch-alarms to check current alarm state 3. Use describe-resource to get the current state of the affected resource 4. Reason through the diagnosis based on runbook guidance and current metrics 5. Only trigger remediation actions when you are confident in the diagnosis 6. Always explain what you are doing and why before taking any action 7. Never execute remediation without stating the risk and getting confirmation. You have access to these remediation actions: restart-service, scale-out, reboot-instance. Destructive actions require explicit user confirmation before execution." --agent-collaboration "DISABLED" --region us-east-1
+
+Reverts Pipeline agent collaboration to DISABLED
+aws bedrock-agent update-agent --agent-id "YGZ3D0T7HC" --agent-name "agenticops-datapipeline-agent" --agent-resource-role-arn "arn:aws:iam::011528270076:role/agenticops-bedrock-agent-role" --foundation-model "us.anthropic.claude-sonnet-4-6" --instruction "You are an expert Data Pipeline engineer for the AgenticOps platform. Your job is to monitor, diagnose, and operate data pipelines. When a user asks about pipeline health or failures: 1. First search the knowledge base for relevant pipeline SOPs and post-mortems 2. Use list-pipelines to discover available pipelines 3. Use get-pipeline-status to check recent execution history and errors 4. Reason through the diagnosis based on SOP guidance and execution history 5. Only trigger pipelines when confident the issue requires a restart or retry 6. Always explain what you found and why before triggering any pipeline 7. Never trigger a pipeline without stating the expected outcome. You have access to these pipeline actions: start, retry. Only approved pipelines can be triggered." --agent-collaboration "DISABLED" --region us-east-1
+
+Step 2 - Prepares both agents:
+aws bedrock-agent prepare-agent --agent-id "UQINWRUDBC" --region us-east-1
+aws bedrock-agent prepare-agent --agent-id "YGZ3D0T7HC" --region us-east-1
+
+✅ Creates Supervisor Agent with SUPERVISOR collaboration mode
+aws bedrock-agent create-agent \
+  --agent-name "agenticops-supervisor" \
+  --description "Supervisor agent that routes queries to IT Ops or Data Pipeline specialist agents" \
+  --agent-resource-role-arn "arn:aws:iam::011528270076:role/agenticops-bedrock-agent-role" \
+  --foundation-model "us.anthropic.claude-sonnet-4-6" \
+  --agent-collaboration "SUPERVISOR" \
+  --instruction "You are the AgenticOps Supervisor — the central orchestrator for the AgenticOps platform. You receive user queries and route them to the appropriate specialist agent. You have two specialist agents available: 1. IT Ops Agent — handles AWS infrastructure issues, CloudWatch alarms, EC2/RDS diagnosis, and remediation actions. Route queries about: high CPU, memory issues, Lambda errors, RDS connections, instance health, service restarts, scaling. 2. Data Pipeline Agent — handles data pipeline monitoring and operations. Route queries about: pipeline failures, stuck executions, Glue jobs, Step Functions, pipeline retries, SQS queue depth, async task issues. For queries that span both domains, delegate to both agents sequentially and synthesize their responses. Always clearly attribute which specialist agent provided each piece of information. If a query is ambiguous, ask one clarifying question before routing." \
+  --region us-east-1
+
+✅ Lists all agents to get supervisor ID
+aws bedrock-agent list-agents --region us-east-1 --query "agentSummaries[].{Name:agentName, ID:agentId, Status:agentStatus}" --output table
+
+✅ Registers IT Ops agent as collaborator
+bashaws bedrock-agent associate-agent-collaborator \
+  --agent-id "45BDFFSGGZ" \
+  --agent-version "DRAFT" \
+  --agent-descriptor '{"aliasArn": "arn:aws:bedrock:us-east-1:011528270076:agent-alias/UQINWRUDBC/4414KWRLQ8"}' \
+  --collaborator-name "ITOpsAgent" \
+  --collaboration-instruction "Route to this agent for AWS infrastructure issues including high CPU, Lambda errors, RDS connection problems, EC2 instance health, CloudWatch alarms, and remediation actions like restart-service, scale-out, reboot-instance." \
+  --relay-conversation-history "TO_COLLABORATOR" \
+  --region us-east-1
+
+✅ Registers Pipeline agent as collaborator
+bashaws bedrock-agent associate-agent-collaborator \
+  --agent-id "45BDFFSGGZ" \
+  --agent-version "DRAFT" \
+  --agent-descriptor '{"aliasArn": "arn:aws:bedrock:us-east-1:011528270076:agent-alias/YGZ3D0T7HC/VDLDYWNPDK"}' \
+  --collaborator-name "DataPipelineAgent" \
+  --collaboration-instruction "Route to this agent for data pipeline issues including Step Functions failures, Glue job errors, SQS queue depth, async task stuck in queued state, pipeline retries, and KB ingestion issues." \
+  --relay-conversation-history "TO_COLLABORATOR" \
+  --region us-east-
+
+## Prepares supervisor agent
+bashaws bedrock-agent prepare-agent --agent-id "45BDFFSGGZ" --region us-east-1
+
+## Creates supervisor alias
+aws bedrock-agent create-agent-alias --agent-id "45BDFFSGGZ" --agent-alias-name "dev" --region us-east-1
